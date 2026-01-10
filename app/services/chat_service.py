@@ -290,7 +290,7 @@ class ChatService:
         score_range = max_score - min_score if max_score != min_score else 1
         
         for c in chunks:
-            chunk_text = c.get("text", "")[:200]
+            chunk_text = c.get("text", "")[:1000]
             
             if chunk_text in seen_chunks:
                 continue
@@ -570,7 +570,7 @@ class ChatService:
         score_range = max_score - min_score if max_score != min_score else 1
         
         for c in chunks:
-            chunk_text = c.get("text", "")[:200]
+            chunk_text = c.get("text", "")[:1000]
             if chunk_text in seen_chunks:
                 continue
             seen_chunks.add(chunk_text)

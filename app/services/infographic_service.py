@@ -203,6 +203,7 @@ class InfographicService:
             sources.append({
                 "title": title,
                 "date": date,
+                "text_preview": text[:1000],
                 "score": chunk.get("score", 0),
             })
 

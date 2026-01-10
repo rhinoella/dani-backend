@@ -155,6 +155,13 @@ class InfographicService:
         retrieval_start = time.time()
         search_query = topic or request
         
+        if doc_type == "meeting":
+            # WORKAROUND: Legacy data in Qdrant is missing the 'doc_type' field.
+            # Filtering by doc_type="meeting" returns 0 results.
+            # specific to "meeting" serves no purpose if the collection is implicitly meetings.
+            # We switch to "all" to bypass the filter.
+            doc_type = "all"
+
         metadata_filter = None
         if doc_type and doc_type != "all":
             metadata_filter = MetadataFilter(

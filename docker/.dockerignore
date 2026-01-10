@@ -1,0 +1,51 @@
+# Python bytecode and cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Python packages
+*.egg
+*.egg-info
+dist
+build
+
+# Virtual environments
+.env
+.env.local
+.env.*.local
+.venv
+venv/
+ENV/
+env/
+
+# Version control
+.git
+.gitignore
+
+# Testing
+.pytest_cache
+.coverage
+htmlcov
+tests/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*~
+
+# IDE and OS
+.DS_Store
+.vscode/
+.idea/
+*.iml
+
+# Docker-specific
+docker/qdrant/storage/*
+
+# Documentation (uncomment if you want to exclude)
+# *.md
+# README.md

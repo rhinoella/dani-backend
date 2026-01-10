@@ -1,0 +1,89 @@
+# =============================================================================
+# DANI Engine - Project Configuration
+# =============================================================================
+
+[project]
+name = "dani-engine"
+version = "0.1.0"
+description = "RAG-powered meeting intelligence assistant"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+
+# =============================================================================
+# Pytest Configuration
+# =============================================================================
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore::DeprecationWarning:testcontainers.*",
+]
+markers = [
+    "integration: marks tests as integration tests (require external services, run with --integration)",
+    "performance: marks tests as performance tests (run with --performance)",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
+
+# =============================================================================
+# Coverage Configuration
+# =============================================================================
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "tests/*",
+    "app/__pycache__/*",
+    "scripts/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+# =============================================================================
+# Ruff Linter & Formatter
+# =============================================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # Pyflakes
+    "W",      # pycodestyle warnings
+    "I",      # isort (import ordering)
+    "N",      # pep8-naming
+    "UP",     # pyupgrade (modernize syntax)
+    "B",      # flake8-bugbear (common bugs)
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "ASYNC",  # async best practices
+]
+ignore = [
+    "E501",   # Line too long - handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # Allow assert in tests
+
+# =============================================================================
+# MyPy Type Checker
+# =============================================================================
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true

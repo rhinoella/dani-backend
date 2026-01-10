@@ -157,6 +157,8 @@ async def chat(
                 full_response = ""
                 sources = []
                 timing_data = {}
+                tool_result = None
+                tool_name = None
                 
                 async for chunk in service.answer_stream(
                     req.query, 
@@ -164,6 +166,7 @@ async def chat(
                     conversation_history=conversation_history,
                     doc_type=req.doc_type,
                 ):
+                    print(f"DEBUG: Got chunk: {chunk[:50]}...", flush=True)
                     yield f"data: {chunk}\n\n"
                     
                     # Collect response for storage
@@ -175,6 +178,13 @@ async def chat(
                         sources = chunk_data.get("content", [])
                     elif chunk_data.get("type") == "timing":
                         timing_data = chunk_data.get("content", {})
+                    elif chunk_data.get("type") == "tool_result":
+                        tool_result = chunk_data.get("data")
+                        tool_name = chunk_data.get("tool")
+                        if tool_result and "sources" in tool_result:
+                            sources = tool_result.get("sources", [])
+                    elif chunk_data.get("type") == "tool_call":
+                        tool_name = chunk_data.get("tool")
                 
                 # Log timing summary
                 if timing_data:
@@ -185,7 +195,7 @@ async def chat(
                                f"tokens={timing_data.get('tokens_generated')}")
                 
                 # Store assistant response for authenticated users with FULL sources
-                if current_user and conversation_id and full_response:
+                if current_user and conversation_id and (full_response or tool_result):
                     try:
                         logger.info(f"[CHAT] Storing assistant response to conversation: {conversation_id}")
                         logger.info(f"[CHAT] Storing {len(sources)} sources with the message")
@@ -204,15 +214,27 @@ async def chat(
                             for s in sources
                         ]
                         
+                        # Ensure content is not empty for DB constraint
+                        content_to_store = full_response
+                        if not content_to_store and tool_result:
+                            if tool_name == "infographic_generator":
+                                content_to_store = "Generated infographic."
+                            elif tool_name == "content_writer":
+                                content_to_store = "Generated content."
+                            else:
+                                content_to_store = "Tool execution complete."
+
                         assistant_msg = await conv_service.add_message(
                             conversation_id=conversation_id,
                             user_id=current_user.id,
                             role="assistant",
-                            content=full_response,
+                            content=content_to_store,
                             sources=sources_to_store,
                             metadata={
                                 "timing": timing_data,
                                 "chunks_used": len(sources),
+                                "tool_result": tool_result,
+                                "tool_name": tool_name,
                             }
                         )
                         logger.info(f"[CHAT] Assistant message stored: id={assistant_msg.id}, "

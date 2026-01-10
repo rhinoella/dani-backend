@@ -195,7 +195,7 @@ class InfographicService:
         sources = []
         
         for chunk in chunks:
-            title = chunk.get("title", "Untitled")
+            title = chunk.get("title") or "Untitled"
             text = chunk.get("text", "")
             date = chunk.get("date")
             

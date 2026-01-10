@@ -73,7 +73,7 @@ class RAGAnalyticsService:
             rag_log = RAGLog(
                 user_id=user_id,
                 conversation_id=conversation_id,
-                query=query,
+                query=query[:2000],
                 query_length=len(query),
                 query_intent=query_intent,
                 query_entities=query_entities,

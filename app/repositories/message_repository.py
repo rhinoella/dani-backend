@@ -90,7 +90,7 @@ class MessageRepository(BaseRepository[Message]):
             content=content,
             sources=sources,
             confidence_score=confidence_score,
-            metadata=metadata
+            metadata_=metadata
         )
     
     async def add_user_message(

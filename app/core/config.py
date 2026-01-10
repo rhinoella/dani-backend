@@ -101,7 +101,7 @@ class Settings(BaseSettings):
     
     MAX_TRANSCRIPT_SIZE_MB: float = 10.0
     MAX_CHUNKS_PER_TRANSCRIPT: int = 1000
-    MAX_QUERY_LENGTH: int = 2000
+    MAX_QUERY_LENGTH: int = 10000
     MAX_BATCH_SIZE: int = 50
     
     SEMANTIC_CACHE_ENABLED: bool = True

@@ -128,4 +128,8 @@ class Message(Base):
             "confidence_score": self.confidence_score,
             "tokens_used": self.tokens_used,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+            "metadata": self.metadata_,
+            # Helper fields for frontend compatibility
+            "toolResult": self.metadata_.get("tool_result") if self.metadata_ else None,
+            "toolName": self.metadata_.get("tool_name") if self.metadata_ else None,
         }

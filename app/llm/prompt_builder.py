@@ -97,7 +97,8 @@ class PromptBuilder:
         grounding_instruction = """
 IMPORTANT INSTRUCTIONS:
 - Base your answer ONLY on the provided meeting sources above
-- When referencing specific information, cite the source (e.g., "According to [Source 1]...")
+- When referencing specific information, refer to the meeting context naturally (e.g., "In the discussion with [Company/Person]...", "During the [Meeting Title]...").
+- You can mention "source [number]" if needed for ambiguity, but prefer using the meeting title or context description.
 - If the sources don't contain enough information to answer, say "I don't have enough information about this in the meeting notes"
 - Do NOT make up information that isn't in the sources
 - RESPONSE FORMAT: Write in PLAIN TEXT paragraphs only. DO NOT use markdown, bullet points, or lists.

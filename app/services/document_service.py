@@ -154,7 +154,7 @@ class DocumentService:
         user_id: Optional[str] = None,
     ) -> DocumentUploadResponse:
         """
-        Upload and process a document.
+        Uploads a document to S3 and creates a database record.
         
         Args:
             filename: Original filename
@@ -165,7 +165,7 @@ class DocumentService:
             user_id: ID of uploading user (optional)
             
         Returns:
-            DocumentUploadResponse with document info
+            DocumentUploadResponse with document info (status: PENDING)
         """
         logger.info(f"Uploading document: {filename} ({len(file_content)} bytes)")
         
@@ -202,6 +202,7 @@ class DocumentService:
         # Create document record (status: PENDING)
         document = await self.repository.create(
             filename=filename,
+            original_filename=filename,
             file_type=file_type,
             file_size=len(file_content),
             mime_type=mime_type,
@@ -216,21 +217,100 @@ class DocumentService:
         
         await self.session.commit()
         
-        logger.info(f"Document record created: {document.id}")
+        logger.info(f"Document record created: {document.id} (PENDING)")
         
-        # Process document (could be done async/background)
+        return DocumentUploadResponse(
+            id=document.id,
+            filename=document.filename,
+            file_type=SchemaDocumentType(document.file_type.value),
+            file_size=document.file_size,
+            status=SchemaDocumentStatus(document.status.value),
+            message="Document uploaded, processing queued",
+        )
+    
+    async def process_document(self, document: Document, file_content: bytes) -> None:
+        """Process document: extract text, chunk, embed, store."""
         try:
-            await self._process_document(document, file_content)
+            logger.info(f"Processing document: {document.id} ({document.file_type})")
+            
+            # Update status to processing
+            await self.repository.update_status(document.id, DocumentStatus.PROCESSING)
+            await self.session.commit() # Commit needed since this runs in background
+            
+            # 1) Extract text based on file type
+            extracted = self._extract_text(document, file_content)
+            text = extracted["text"]
+            doc_metadata = extracted.get("metadata", {})
+            
+            if not text.strip():
+                raise ValueError("No text could be extracted from document")
+            
+            logger.info(f"Extracted {len(text)} chars from document")
+            
+            # Update document metadata from extraction
+            if doc_metadata:
+                current_meta = document.metadata_ or {}
+                current_meta.update(doc_metadata)
+                await self.repository.update(document.id, metadata_=current_meta)
+            
+            # 2) Create chunk records
+            chunk_records = self._create_chunks(document, extracted)
+            
+            if not chunk_records:
+                raise ValueError("No chunks generated from document")
+            
+            logger.info(f"Created {len(chunk_records)} chunks")
+            
+            # 3) Embed chunks
+            texts = [c["text"] for c in chunk_records]
+            vectors = await self.embedder.embed_batch(texts)
+            vector_size = len(vectors[0])
+            
+            # 4) Ensure collection exists
+            self.store.ensure_collection(self.collection, vector_size)
+            
+            # 5) Build and upsert points
+            points: List[qm.PointStruct] = []
+            total_tokens = 0
+            
+            for i, (chunk, vector) in enumerate(zip(chunk_records, vectors)):
+                metadata = chunk.get("metadata", {})
+                token_count = metadata.get("token_count", 0)
+                total_tokens += token_count
+                
+                payload = {
+                    "source": "document",
+                    "document_id": document.id,
+                    "filename": document.filename,
+                    "file_type": document.file_type.value,
+                    "title": document.title,
+                    "user_id": document.user_id,
+                    "chunk_index": i,
+                    "token_count": token_count,
+                    "text": chunk["text"],
+                    **{k: v for k, v in metadata.items() if k not in ["token_count"]},
+                }
+                
+                # Generate stable point ID
+                point_id = _stable_point_id("document", document.id, str(i))
+                points.append(qm.PointStruct(id=point_id, vector=vector, payload=payload))
+            
+            # 6) Upsert to Qdrant
+            self.store.upsert(self.collection, points)
+            
+            logger.info(f"Upserted {len(points)} vectors to Qdrant")
+            
+            # 7) Update document status
+            await self.repository.update_status(
+                document.id,
+                DocumentStatus.COMPLETED,
+                chunk_count=len(points),
+                total_tokens=total_tokens,
+            )
             await self.session.commit()
             
-            return DocumentUploadResponse(
-                id=document.id,
-                filename=document.filename,
-                file_type=SchemaDocumentType(document.file_type.value),
-                file_size=document.file_size,
-                status=SchemaDocumentStatus(document.status.value),
-                message="Document uploaded and processed successfully",
-            )
+            logger.info(f"Document {document.id} processed successfully")
+            
         except Exception as e:
             logger.error(f"Document processing failed: {e}")
             await self.repository.update_status(
@@ -239,96 +319,6 @@ class DocumentService:
                 error_message=str(e),
             )
             await self.session.commit()
-            
-            return DocumentUploadResponse(
-                id=document.id,
-                filename=document.filename,
-                file_type=SchemaDocumentType(document.file_type.value),
-                file_size=document.file_size,
-                status=SchemaDocumentStatus.FAILED,
-                message=f"Document upload failed: {str(e)}",
-            )
-    
-    async def _process_document(self, document: Document, file_content: bytes) -> None:
-        """Process document: extract text, chunk, embed, store."""
-        logger.info(f"Processing document: {document.id} ({document.file_type})")
-        
-        # Update status to processing
-        await self.repository.update_status(document.id, DocumentStatus.PROCESSING)
-        await self.session.flush()
-        
-        # 1) Extract text based on file type
-        extracted = self._extract_text(document, file_content)
-        text = extracted["text"]
-        doc_metadata = extracted.get("metadata", {})
-        
-        if not text.strip():
-            raise ValueError("No text could be extracted from document")
-        
-        logger.info(f"Extracted {len(text)} chars from document")
-        
-        # Update document metadata from extraction
-        if doc_metadata:
-            current_meta = document.metadata_ or {}
-            current_meta.update(doc_metadata)
-            await self.repository.update(document.id, metadata_=current_meta)
-        
-        # 2) Create chunk records
-        chunk_records = self._create_chunks(document, extracted)
-        
-        if not chunk_records:
-            raise ValueError("No chunks generated from document")
-        
-        logger.info(f"Created {len(chunk_records)} chunks")
-        
-        # 3) Embed chunks
-        texts = [c["text"] for c in chunk_records]
-        vectors = await self.embedder.embed_batch(texts)
-        vector_size = len(vectors[0])
-        
-        # 4) Ensure collection exists
-        self.store.ensure_collection(self.collection, vector_size)
-        
-        # 5) Build and upsert points
-        points: List[qm.PointStruct] = []
-        total_tokens = 0
-        
-        for i, (chunk, vector) in enumerate(zip(chunk_records, vectors)):
-            metadata = chunk.get("metadata", {})
-            token_count = metadata.get("token_count", 0)
-            total_tokens += token_count
-            
-            payload = {
-                "source": "document",
-                "document_id": document.id,
-                "filename": document.filename,
-                "file_type": document.file_type.value,
-                "title": document.title,
-                "user_id": document.user_id,
-                "chunk_index": i,
-                "token_count": token_count,
-                "text": chunk["text"],
-                **{k: v for k, v in metadata.items() if k not in ["token_count"]},
-            }
-            
-            # Generate stable point ID
-            point_id = _stable_point_id("document", document.id, str(i))
-            points.append(qm.PointStruct(id=point_id, vector=vector, payload=payload))
-        
-        # 6) Upsert to Qdrant
-        self.store.upsert(self.collection, points)
-        
-        logger.info(f"Upserted {len(points)} vectors to Qdrant")
-        
-        # 7) Update document status
-        await self.repository.update_status(
-            document.id,
-            DocumentStatus.COMPLETED,
-            chunk_count=len(points),
-            total_tokens=total_tokens,
-        )
-        
-        logger.info(f"Document {document.id} processed successfully")
     
     def _extract_text(self, document: Document, file_content: bytes) -> Dict[str, Any]:
         """Extract text from document based on type."""

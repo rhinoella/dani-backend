@@ -129,3 +129,23 @@ class UserService:
         """Increment rate limit counters after a request."""
         if self.rate_limiter:
             await self.rate_limiter.increment(user_id)
+
+    async def create_manual_user(self, email: str, name: str) -> User:
+        """Create a user manually (e.g. from admin panel)."""
+        # Check if user already exists
+        existing = await self.user_repo.get_by_email(email)
+        if existing:
+            raise ValueError("User with this email already exists")
+    
+        placeholder_google_id = f"manual:{email}"
+        
+        return await self.user_repo.create(
+            google_id=placeholder_google_id,
+            email=email,
+            name=name,
+            last_login_at=None
+        )
+
+    async def get_users(self, skip: int = 0, limit: int = 100) -> list[User]:
+        """Get all users."""
+        return await self.user_repo.get_all_users(skip, limit)

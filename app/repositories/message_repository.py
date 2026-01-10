@@ -297,3 +297,32 @@ class MessageRepository(BaseRepository[Message]):
             }
             for msg in messages
         ]
+
+    async def soft_delete_after_message(self, conversation_id: str, message_id: str) -> int:
+        """
+        Soft delete all messages in a conversation that were created AFTER the specified message.
+        Does NOT delete the specified message itself.
+        """
+        # First get the reference message to know its creation time
+        ref_msg = await self.get_by_id(message_id)
+        if not ref_msg or ref_msg.conversation_id != conversation_id:
+            return 0
+            
+        # Delete messages created after the reference message
+        query = select(Message).where(
+            Message.conversation_id == conversation_id,
+            Message.created_at > ref_msg.created_at,
+            Message.deleted_at.is_(None)
+        )
+        
+        result = await self.session.execute(query)
+        messages_to_delete = list(result.scalars().all())
+        
+        count = 0
+        now = datetime.utcnow()
+        for msg in messages_to_delete:
+            msg.deleted_at = now
+            count += 1
+            
+        await self.session.flush()
+        return count

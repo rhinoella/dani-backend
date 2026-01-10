@@ -33,26 +33,33 @@ class QueryRewriter:
     
     # Patterns that indicate a follow-up query needing context
     FOLLOWUP_PATTERNS = [
-        r"^what about\b",           # "What about the timeline?"
-        r"^how about\b",            # "How about costs?"
-        r"^and\b",                  # "And the budget?"
-        r"^also\b",                 # "Also, who's responsible?"
-        r"^but\b",                  # "But what about risks?"
-        r"^can you\b.*\b(it|that|this|them)\b",  # "Can you elaborate on that?"
-        r"^tell me more\b",         # "Tell me more"
-        r"^more details?\b",        # "More details"
-        r"^expand on\b",            # "Expand on that"
-        r"^elaborate\b",            # "Elaborate"
+        r"^what about\b",           
+        r"^how about\b",           
+        r"^and\b",                
+        r"^also\b",                
+        r"^but\b",                 
+        r"^can you\b.*\b(it|that|this|them)\b",  
+        r"^tell me more\b",         
+        r"^talk more\b",            
+        r"^more details?\b",       
+        r"^expand on\b",           
+        r"^elaborate\b",            
+        r"^continue\b",             
+        r"^go on\b",                
+        r"^explain more\b",         
+        r"^what else\b",            
+        r"^anything else\b",        
     ]
     
     # Pronouns and references that need resolution
     PRONOUN_PATTERNS = [
-        r"\b(it|its|it's)\b",       # "What's the timeline for it?"
-        r"\b(this|that|these|those)\b",  # "Tell me more about that"
-        r"\b(they|them|their)\b",   # "When are they launching?"
-        r"\b(he|she|his|her)\b",    # "What did she say?"
-        r"\bthe same\b",            # "The same for next quarter?"
-        r"\b(above|previous|earlier|mentioned)\b",  # "The mentioned project"
+        r"\b(it|its|it's)\b",       
+        r"\b(this|that|these|those)\b", 
+        r"\b(they|them|their)\b",   
+        r"\b(he|she|his|her)\b",    
+        r"\bthe same\b",            
+        r"\b(above|previous|earlier|mentioned)\b",  
+        r"\bthe (meeting|discussion|call|session|plan|document|report|presentation|project|proposal|email)\b",
     ]
     
     # Short query threshold (likely needs context)
@@ -66,12 +73,17 @@ CONVERSATION HISTORY:
 CURRENT QUERY: {query}
 
 INSTRUCTIONS:
-1. If the query contains pronouns (it, that, this, they, etc.) or references to previous topics, replace them with the actual subjects from history.
-2. If the query is short and lacks context, expand it using relevant information from history.
-3. If the query is already clear and self-contained, return it unchanged.
+1. CRITICAL: Identify the main topic from the most recent assistant response and user question.
+2. If the query contains pronouns (it, that, this, they, etc.) or vague references like "talk more about it", replace them with the SPECIFIC TOPIC being discussed.
+3. If the query is short like "continue", "go on", "talk more", or "explain more", rewrite it to explicitly ask for more information about the PREVIOUS TOPIC.
 4. Keep the rewritten query concise and natural-sounding.
 5. Do NOT answer the question - only rewrite it.
 6. Return ONLY the rewritten query, nothing else.
+
+EXAMPLES:
+- History: User asked about "hacking marketing using government mandates", Query: "talk more about it" → "Explain more about hacking marketing using government mandates"
+- History: User asked about "Q1 roadmap", Query: "who is leading it?" → "Who is leading the Q1 roadmap?"
+- History: Discussion about "SME App Store strategy", Query: "continue" → "Continue explaining the SME App Store strategy"
 
 REWRITTEN QUERY:"""
 
@@ -171,9 +183,11 @@ REWRITTEN QUERY:"""
             # Use LLM to rewrite
             rewritten = await self.llm.generate(
                 prompt=prompt,
-                system_prompt="You are a query rewriting assistant. Output only the rewritten query.",
-                temperature=0.1,  # Low temperature for consistency
-                max_tokens=200,   # Queries should be short
+                system="You are a query rewriting assistant. Output only the rewritten query.",
+                options={
+                    "temperature": 0.1,  # Low temperature for consistency
+                    "num_predict": 200,  # Queries should be short
+                }
             )
             
             # Clean up response

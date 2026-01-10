@@ -70,7 +70,7 @@ class OllamaClient:
         await self.close()
 
     @ollama_retry
-    async def generate(self, prompt: str, stream: bool = False) -> str:
+    async def generate(self, prompt: str, system: str = None, stream: bool = False, options: dict = None) -> str:
         """Generate text with retry logic and circuit breaker for resilience.
         
         Settings are read on each request to support instant local/cloud switching:
@@ -84,18 +84,28 @@ class OllamaClient:
         base_url = f"{settings.OLLAMA_BASE_URL}/api/generate"
         model = settings.LLM_MODEL
 
+        # Default options
+        request_options = {
+            "num_ctx": settings.LLM_NUM_CTX,
+            "num_predict": settings.LLM_NUM_PREDICT,
+            "temperature": settings.LLM_TEMPERATURE,
+            "num_thread": settings.LLM_NUM_THREAD,
+        }
+        
+        # Merge provided options if any
+        if options:
+            request_options.update(options)
+
         payload = {
             "model": model,
             "prompt": prompt,
             "stream": False,  # Non-streaming for simplicity
             "keep_alive": "24h",  # Keep model loaded for 24 hours
-            "options": {
-                "num_ctx": settings.LLM_NUM_CTX,
-                "num_predict": settings.LLM_NUM_PREDICT,
-                "temperature": settings.LLM_TEMPERATURE,
-                "num_thread": settings.LLM_NUM_THREAD,
-            }
+            "options": request_options
         }
+        
+        if system:
+            payload["system"] = system
 
         try:
             # Circuit breaker protects against repeated failures

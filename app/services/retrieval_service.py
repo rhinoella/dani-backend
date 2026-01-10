@@ -134,7 +134,7 @@ class RetrievalService:
                 )
             )
         
-        # Document type filter
+    # Document type filter
         if metadata.doc_type and metadata.doc_type != "all":
             conditions.append(
                 qm.FieldCondition(
@@ -142,10 +142,46 @@ class RetrievalService:
                     match=qm.MatchValue(value=metadata.doc_type),
                 )
             )
+
+        if metadata.document_ids:
+            # Match any of the provided document IDs
+            # Note: In document collection it's 'document_id', in transcripts it might be absent
+            # For now we assume we are searching documents collection if explicit document_ids are provided
+            # effectively boosting them or filtering for them.
+            conditions.append(
+                qm.FieldCondition(
+                    key="document_id",
+                    match=qm.MatchAny(any=metadata.document_ids),
+                )
+            )
         
         if not conditions:
             return None
         
+        return qm.Filter(must=conditions)
+    
+    def _build_document_filter(self, metadata: Optional[MetadataFilter]) -> Optional[qm.Filter]:
+        """Build Qdrant filter specifically for the documents collection."""
+        if not metadata:
+            return None
+            
+        conditions = []
+        
+        # document_ids are the primary filter for documents
+        if metadata.document_ids:
+            # In documents collection, 'document_id' is the primary key
+            conditions.append(
+                qm.FieldCondition(
+                    key="document_id",
+                    match=qm.MatchAny(any=metadata.document_ids),
+                )
+            )
+            
+        # Documents can also have chunk_index, etc, but typically we filter docs by ID
+        
+        if not conditions:
+            return None
+            
         return qm.Filter(must=conditions)
     
     def _apply_category_filter(
@@ -249,7 +285,7 @@ class RetrievalService:
                 collection=settings.QDRANT_COLLECTION_DOCUMENTS,
                 query_vector=query_vector,
                 limit=initial_limit,
-                filter_=None,  # Documents have different metadata structure
+                filter_=self._build_document_filter(metadata_filter),  # Use specialized filter for documents
             )
             timings["document_search_ms"] = round((time.time() - doc_start) * 1000, 2)
             logger.debug(f"Found {len(doc_hits)} results from documents collection")

@@ -19,6 +19,12 @@ class UserCreate(UserBase):
     google_id: str
 
 
+class UserCreateManual(BaseModel):
+    """Schema for manually creating a user."""
+    email: EmailStr
+    name: str
+
+
 class UserUpdate(BaseModel):
     """Schema for updating a user."""
     name: Optional[str] = None

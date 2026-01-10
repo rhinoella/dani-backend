@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -46,6 +46,10 @@ class ChatRequest(BaseModel):
         None,
         description="Filter sources by type: meeting, email, document, note, or all"
     )
+    # Explicit document context (from uploads)
+    document_ids: list[str] | None = Field(None, description="List of specific document IDs to include in context")
+    # Metadata for attached documents
+    attachments: list[dict] | None = Field(None, description="Metadata for attached documents")
 
 
 async def get_conversation_service(
@@ -63,6 +67,11 @@ async def get_memory_service(
 ) -> MemoryService:
     """Get memory service with dependencies."""
     return MemoryService(db, conv_cache)
+
+
+def get_chat_service() -> ChatService:
+    """Get chat service instance."""
+    return service
 
 
 @router.post("")
@@ -118,6 +127,11 @@ async def chat(
                 )
             logger.info(f"[CHAT] Found existing conversation: id={conversation.id}, title={conversation.title}, message_count={conversation.message_count}")
         
+        # Prepare metadata for user message (including attachments)
+        user_msg_metadata = {}
+        if req.attachments:
+            user_msg_metadata["attachments"] = req.attachments
+            
         # Add user message to conversation
         logger.info(f"[CHAT] Adding user message to conversation: {conversation_id}")
         user_message = await conv_service.add_message(
@@ -125,9 +139,39 @@ async def chat(
             user_id=current_user.id,
             role="user",
             content=req.query,
+            metadata=user_msg_metadata
         )
         logger.info(f"[CHAT] User message added: id={user_message.id}")
+        
+        # Persist attachments to conversation if present
+        if req.attachments:
+            await conv_service.add_attachments_to_conversation(
+                conversation_id=conversation_id,
+                attachments=req.attachments
+            )
+        
+        # Handle document_ids persistence in conversation
+        # 1. Get existing IDs
+        existing_doc_ids = await conv_service.get_conversation_document_ids(conversation_id)
+        
+        # 2. Merge with new IDs if present
+        if req.document_ids:
+            # Store new document_ids in conversation metadata
+            await conv_service.add_document_ids_to_conversation(
+                conversation_id=conversation_id,
+                document_ids=req.document_ids
+            )
+            # Merge for current request context (prevent race condition by not re-reading)
+            effective_document_ids = list(set(existing_doc_ids + req.document_ids))
+            logger.info(f"[CHAT] Stored {len(req.document_ids)} document_ids in conversation metadata. Effective: {effective_document_ids}")
+        else:
+            effective_document_ids = existing_doc_ids
+            logger.info(f"[CHAT] No new document_ids. Existing effective: {effective_document_ids}")
+            
+        if effective_document_ids:
+            logger.info(f"[CHAT] Using {len(effective_document_ids)} document_ids from conversation context: {effective_document_ids}")
     else:
+        effective_document_ids = req.document_ids or []
         logger.info(f"[CHAT] Anonymous user - no conversation storage")
     
     try:
@@ -152,7 +196,11 @@ async def chat(
                 if current_user and conversation_id:
                     import json
                     logger.info(f"[CHAT] Sending meta with conversation_id: {conversation_id}")
-                    yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conversation_id})}\n\n"
+                    meta_data = {'type': 'meta', 'conversation_id': conversation_id}
+                    # Include the user message ID so frontend can update its temp ID
+                    if user_message:
+                        meta_data['user_message_id'] = user_message.id
+                    yield f"data: {json.dumps(meta_data)}\n\n"
                 
                 full_response = ""
                 sources = []
@@ -165,6 +213,7 @@ async def chat(
                     output_format=req.output_format,
                     conversation_history=conversation_history,
                     doc_type=req.doc_type,
+                    document_ids=effective_document_ids if effective_document_ids else None,
                 ):
                     print(f"DEBUG: Got chunk: {chunk[:50]}...", flush=True)
                     yield f"data: {chunk}\n\n"
@@ -283,6 +332,7 @@ async def chat(
                 output_format=req.output_format,
                 conversation_history=history_context,
                 doc_type=req.doc_type,
+                document_ids=effective_document_ids if effective_document_ids else None,
             )
             
             # Check if service returned an error
@@ -350,6 +400,140 @@ async def chat(
             status_code=500,
             detail="An unexpected error occurred. Please try again."
         )
+
+
+@router.post("/{conversation_id}/messages/{message_id}/edit", response_class=StreamingResponse)
+async def edit_message_and_regenerate(
+    conversation_id: str,
+    message_id: str,
+    req: ChatRequest,
+    current_user: User = Depends(get_current_user),
+    conv_service: ConversationService = Depends(get_conversation_service),
+    chat_service: ChatService = Depends(get_chat_service),
+    _: None = Depends(check_rate_limit)
+):
+    """
+    Edit a user message and regenerate the response.
+    This will:
+    1. Update the message content
+    2. Soft-delete all subsequent messages (rewind history)
+    3. Stream a new response based on the updated context
+    """
+    logger.info(f"[CHAT] Edit request for message {message_id} in conversation {conversation_id}")
+    
+    # 1. Edit message and rewind history
+    updated_message = await conv_service.edit_message(
+        conversation_id=conversation_id,
+        message_id=message_id,
+        user_id=current_user.id,
+        new_content=req.query
+    )
+    
+    if not updated_message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail="Message not found or access denied"
+        )
+
+    # 2. Get updated conversation history for context
+    # Use existing helper to get history
+    history = await conv_service.msg_repo.get_context_messages(conversation_id, limit=10)
+    messages, _ = history
+    
+    # Format for RAG context (exclude the current message we just edited, it's the query)
+    conversation_history = [
+        {"role": m.role, "content": m.content} 
+        for m in messages 
+        if m.id != message_id 
+    ]
+    
+    # 3. Stream new response
+    # Re-use document IDs from conversation if available
+    doc_ids = await conv_service.get_conversation_document_ids(conversation_id)
+    
+    # If request includes NEW doc IDs, merge them (though usually edit uses existing context)
+    if req.document_ids:
+        doc_ids = list(set(doc_ids + req.document_ids))
+    
+    # Setup generator for streaming response with full RAG + History
+    async def generate_edit_stream():
+        # Send conversation_id first
+        import json
+        yield f"data: {json.dumps({'type': 'meta', 'conversation_id': conversation_id, 'is_edit': True})}\n\n"
+        
+        full_response = ""
+        sources = []
+        timing_data = {}
+        tool_result = None
+        tool_name = None
+        
+        # Stream response
+        async for chunk in chat_service.answer_stream(
+            query=req.query,
+            output_format=req.output_format,
+            conversation_history=conversation_history,
+            doc_type=req.doc_type,
+            document_ids=doc_ids if doc_ids else None
+        ):
+            yield f"data: {chunk}\n\n"
+            
+            # Collect data for storage
+            chunk_data = json.loads(chunk)
+            if chunk_data.get("type") == "token":
+                full_response += chunk_data.get("content", "")
+            elif chunk_data.get("type") == "sources":
+                sources = chunk_data.get("content", [])
+            elif chunk_data.get("type") == "timing":
+                timing_data = chunk_data.get("content", {})
+            elif chunk_data.get("type") == "tool_result":
+                tool_result = chunk_data.get("data")
+                tool_name = chunk_data.get("tool")
+                if tool_result and "sources" in tool_result:
+                    sources = tool_result.get("sources", [])
+            elif chunk_data.get("type") == "tool_call":
+                tool_name = chunk_data.get("tool")
+
+        # Store assistant response
+        if full_response or tool_result:
+            try:
+                # Prepare sources for storage
+                sources_to_store = [
+                    {
+                        "title": s.get("title"),
+                        "date": s.get("date"),
+                        "transcript_id": s.get("transcript_id"),
+                        "speakers": s.get("speakers", []),
+                        "text_preview": s.get("text_preview"),
+                        "relevance_score": s.get("relevance_score"),
+                    }
+                    for s in sources
+                ]
+                
+                content_to_store = full_response
+                if not content_to_store and tool_result:
+                     content_to_store = "Tool execution complete."
+
+                await conv_service.add_message(
+                    conversation_id=conversation_id,
+                    user_id=current_user.id,
+                    role="assistant",
+                    content=content_to_store,
+                    sources=sources_to_store,
+                    metadata={
+                        "timing": timing_data,
+                        "chunks_used": len(sources),
+                        "tool_result": tool_result,
+                        "tool_name": tool_name,
+                        "is_regenerated": True
+                    }
+                )
+            except Exception as e:
+                logger.error(f"[CHAT] Failed to store regenerated message: {e}")
+
+    return StreamingResponse(
+        generate_edit_stream(),
+        media_type="text/event-stream"
+    )
 
 
 @router.post("/trace")

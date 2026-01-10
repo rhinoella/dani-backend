@@ -3,7 +3,7 @@ Message schemas.
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Union
 from datetime import datetime
 from enum import Enum
 
@@ -17,11 +17,23 @@ class MessageRole(str, Enum):
 
 class SourceReference(BaseModel):
     """Source reference for a message."""
+    # Meeting/Transcript information (primary source fields)
+    title: Optional[str] = None
+    date: Optional[Union[str, int]] = None
+    transcript_id: Optional[str] = None
+    speakers: Optional[List[str]] = []
+    text_preview: Optional[str] = None
+    relevance_score: Optional[float] = None
+    raw_score: Optional[float] = None
+    
+    # Document-based sources (for uploaded documents)
     document_id: Optional[str] = None
     chunk_id: Optional[str] = None
     filename: Optional[str] = None
     content_preview: Optional[str] = None
     score: Optional[float] = None
+    
+    model_config = {"extra": "allow"}  # Allow additional fields
 
 
 class MessageBase(BaseModel):
@@ -50,7 +62,7 @@ class MessageResponse(BaseModel):
     content: str
     sources: Optional[List[SourceReference]] = None
     confidence_score: Optional[float] = None
-    metadata: Optional[dict] = None
+    metadata: Optional[dict] = Field(None, validation_alias="metadata_")
     created_at: datetime
     
     model_config = {"from_attributes": True}

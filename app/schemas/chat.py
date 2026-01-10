@@ -29,6 +29,11 @@ class ChatRequest(BaseModel):
         None, 
         description="Filter sources by type: meeting, email, document, note, or all"
     )
+    # Uploaded documents - full content will be injected into chat context
+    document_ids: Optional[List[str]] = Field(
+        None,
+        description="List of uploaded document IDs to include in chat context. Full document content will be injected."
+    )
 
 
 class ChatResponse(BaseModel):

@@ -71,8 +71,17 @@ class Document(Base):
         nullable=False,
         comment="Original filename",
     )
+    original_filename: Mapped[str] = mapped_column(
+        String(500),
+        nullable=False,
+        comment="Original filename uploaded by user",
+    )
     file_type: Mapped[DocumentType] = mapped_column(
-        SQLEnum(DocumentType, name="document_type"),
+        SQLEnum(
+            DocumentType, 
+            name="document_type",
+            values_callable=lambda x: [e.value for e in x],
+        ),
         nullable=False,
         index=True,
         comment="File type (pdf, docx, txt)",
@@ -114,7 +123,11 @@ class Document(Base):
     
     # Processing status
     status: Mapped[DocumentStatus] = mapped_column(
-        SQLEnum(DocumentStatus, name="document_status"),
+        SQLEnum(
+            DocumentStatus, 
+            name="document_status",
+            values_callable=lambda x: [e.value for e in x],
+        ),
         default=DocumentStatus.PENDING,
         nullable=False,
         index=True,

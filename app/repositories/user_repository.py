@@ -6,6 +6,9 @@ from typing import Optional, List
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timezone
+import logging
+
+logger = logging.getLogger(__name__)
 
 from app.repositories.base import BaseRepository
 from app.database.models import User, Conversation, Message
@@ -60,6 +63,21 @@ class UserRepository(BaseRepository[User]):
             await self.session.flush()
             await self.session.refresh(user)
             return user
+            
+        # Check if user exists by email (for manual creation linking)
+        existing_user_by_email = await self.get_by_email(email)
+        if existing_user_by_email:
+            logger.info(f"Linking Google account {google_id} to existing user {email}")
+            existing_user_by_email.google_id = google_id
+            existing_user_by_email.last_login_at = utc_now()
+            if name:
+                existing_user_by_email.name = name
+            if picture_url:
+                existing_user_by_email.picture_url = picture_url
+            
+            await self.session.flush()
+            await self.session.refresh(existing_user_by_email)
+            return existing_user_by_email
         
         # Create new user
         return await self.create(
@@ -125,4 +143,14 @@ class UserRepository(BaseRepository[User]):
             User.last_login_at >= cutoff
         )
         result = await self.session.execute(query)
+        result = await self.session.execute(query)
         return result.scalar() or 0
+
+    async def get_all_users(self, skip: int = 0, limit: int = 100) -> List[User]:
+        """Get all users."""
+        query = select(User).where(
+            User.deleted_at.is_(None)
+        ).order_by(User.created_at.desc()).offset(skip).limit(limit)
+        
+        result = await self.session.execute(query)
+        return list(result.scalars().all())

@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, status, BackgroundTasks
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +21,8 @@ from app.api.deps import get_db, get_current_user, get_optional_user
 from app.database.models import User
 from app.database.models.document import DocumentType, DocumentStatus
 from app.services.document_service import DocumentService
+from app.database.connection import get_async_session, get_db_context
+# ... existing imports ...
 from app.schemas.document import (
     DocumentResponse,
     DocumentUploadResponse,
@@ -56,8 +58,28 @@ def get_document_service(db: AsyncSession = Depends(get_db)) -> DocumentService:
     return DocumentService(db)
 
 
+async def process_document_background(document_id: str, file_content: bytes):
+    """
+    Background task to process a document (extract, chunk, embed).
+    Uses get_db_context() for proper session management in background.
+    """
+    logger.info(f"Starting background processing for document {document_id}")
+    try:
+        async with get_db_context() as session:
+            service = DocumentService(session)
+            document = await service.repository.get_by_id(document_id)
+            if document:
+                await service.process_document(document, file_content)
+                logger.info(f"Background processing completed for document {document_id}")
+            else:
+                logger.error(f"Document {document_id} not found during background processing")
+    except Exception as e:
+        logger.error(f"Background processing error for {document_id}: {e}", exc_info=True)
+
+
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(..., description="File to upload (PDF, DOCX, or TXT)"),
     title: Optional[str] = Form(None, max_length=500, description="Document title"),
     description: Optional[str] = Form(None, max_length=2000, description="Document description"),
@@ -74,11 +96,11 @@ async def upload_document(
     
     The document will be:
     1. Validated and stored
-    2. Text extracted
-    3. Chunked into segments
-    4. Embedded and stored in vector database
+    2. Text extracted (Background)
+    3. Chunked into segments (Background)
+    4. Embedded and stored in vector database (Background)
     
-    Returns the document ID and processing status.
+    Returns the document ID with status PENDING.
     """
     logger.info(f"Upload request: {file.filename} ({file.content_type})")
     
@@ -118,6 +140,7 @@ async def upload_document(
     
     # Process upload
     try:
+        # 1. Store file and create DB record (PENDING)
         result = await service.upload_document(
             filename=file.filename,
             file_content=file_content,
@@ -126,6 +149,14 @@ async def upload_document(
             description=description,
             user_id=current_user.id if current_user else None,
         )
+        
+        # 2. Schedule processing in background
+        background_tasks.add_task(
+            process_document_background, 
+            result.id, 
+            file_content
+        )
+        
         return result
     except ValueError as e:
         logger.warning(f"Document upload validation failed: {e}")

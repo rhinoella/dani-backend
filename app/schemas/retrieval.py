@@ -35,6 +35,7 @@ class MetadataFilter(BaseModel):
         default=None,
         description="Filter by meeting category: board, 1on1, standup, client, internal, external, or all"
     )
+    document_ids: Optional[List[str]] = Field(default=None, description="Filter by specific document IDs")
 
 
 class RetrievalRequest(BaseModel):

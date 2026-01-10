@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     EMBEDDING_MODEL: str = "nomic-embed-text"
     
     LLM_NUM_CTX: int = 4096
-    LLM_NUM_PREDICT: int = 512
+    LLM_NUM_PREDICT: int = 2048
     LLM_NUM_THREAD: int = 4
     LLM_TEMPERATURE: float = 0.7
 

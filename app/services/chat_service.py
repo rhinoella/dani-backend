@@ -5,6 +5,8 @@ from typing import Dict, Any, List, AsyncIterator, Optional
 import json
 import time
 
+from qdrant_client.http import models as qm
+
 from app.core.config import settings
 from app.core.metrics import metrics
 from app.services.retrieval_service import RetrievalService
@@ -53,6 +55,7 @@ class ChatService:
         use_cache: bool = True,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         doc_type: Optional[str] = None,
+        document_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a RAG-grounded answer.
@@ -64,6 +67,7 @@ class ChatService:
             use_cache: Use response cache
             conversation_history: List of {"role": "user"|"assistant", "content": str}
             doc_type: Filter by document type (meeting, email, document, note, all)
+            document_ids: Optional list of document IDs to restrict search to
         """
         start_time = time.time()
         debug: Dict[str, Any] = {}
@@ -102,10 +106,13 @@ class ChatService:
         # 1️⃣ Retrieve with confidence scoring (using potentially rewritten query)
         retrieval_start = time.time()
         try:
-            # Build metadata filter if doc_type specified
+            # Build metadata filter if doc_type specified or document_ids present
             metadata_filter = None
-            if doc_type and doc_type != "all":
-                metadata_filter = MetadataFilter(doc_type=doc_type)
+            if (doc_type and doc_type != "all") or document_ids:
+                metadata_filter = MetadataFilter(
+                    doc_type=doc_type if doc_type != "all" else None,
+                    document_ids=document_ids
+                )
             
             retrieval_result = await self.retrieval.search_with_confidence(
                 query=retrieval_query, 
@@ -446,12 +453,60 @@ class ChatService:
                 "error": str(e),
             })
 
+    async def _get_full_document_content(self, document_id: str) -> Optional[str]:
+        """Fetch full document content from vector store for inclusion in chat context."""
+        try:
+            from app.vectorstore.qdrant import QdrantStore
+            store = QdrantStore()
+            
+            # Query for all chunks belonging to this document
+            results = store.client.scroll(
+                collection_name=settings.QDRANT_COLLECTION_DOCUMENTS,
+                scroll_filter=qm.Filter(
+                    must=[
+                        qm.FieldCondition(
+                            key="document_id",
+                            match=qm.MatchValue(value=document_id),
+                        )
+                    ]
+                ),
+                limit=1000,  # Get all chunks
+                with_payload=True,
+                with_vectors=False,
+            )
+            
+            points = results[0] if results else []
+            
+            if not points:
+                logger.warning(f"No chunks found for document {document_id}")
+                return None
+            
+            # Reconstruct full document from chunks in order
+            chunks_by_index = {}
+            for point in points:
+                payload = point.payload or {}
+                chunk_index = payload.get("chunk_index", 0)
+                text = payload.get("text", "")
+                chunks_by_index[chunk_index] = text
+            
+            # Sort by index and reconstruct
+            sorted_indices = sorted(chunks_by_index.keys())
+            full_text = "\n".join([chunks_by_index[idx] for idx in sorted_indices])
+            
+            logger.info(f"Reconstructed document {document_id}: {len(full_text)} chars from {len(chunks_by_index)} chunks")
+            return full_text
+            
+        except Exception as e:
+            logger.error(f"Failed to get full document content for {document_id}: {e}")
+            return None
+
     async def answer_stream(
         self, 
         query: str,
         output_format: Optional[str] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
         doc_type: Optional[str] = None,
+        document_ids: Optional[List[str]] = None,
     ) -> AsyncIterator[str]:
         """
         Stream answer tokens as they're generated for faster perceived response.
@@ -462,6 +517,7 @@ class ChatService:
             output_format: Optional output format template
             conversation_history: List of {"role": "user"|"assistant", "content": str} for context
             doc_type: Filter by document type (meeting, email, document, note, all)
+            document_ids: Optional list of document IDs to restrict search to
         """
         import time
         stream_start_time = time.time()
@@ -469,6 +525,8 @@ class ChatService:
         logger.info(f"[STREAM] === Starting streaming response ===")
         logger.info(f"[STREAM] Query: {query[:100]}...")
         logger.info(f"[STREAM] Conversation history: {len(conversation_history) if conversation_history else 0} messages")
+        if document_ids:
+            logger.info(f"[STREAM] Restricting search to {len(document_ids)} documents")
         
         # 🤖 AGENT ROUTING: Check if this request needs a tool
         agent = get_agent_service()
@@ -528,10 +586,13 @@ class ChatService:
         # 1️⃣ Retrieve chunks with confidence scoring (using potentially rewritten query)
         retrieval_start = time.time()
         
-        # Build metadata filter if doc_type specified
+        # Build metadata filter if doc_type specified or document_ids present
         metadata_filter = None
-        if doc_type and doc_type != "all":
-            metadata_filter = MetadataFilter(doc_type=doc_type)
+        if (doc_type and doc_type != "all") or document_ids:
+            metadata_filter = MetadataFilter(
+                doc_type=doc_type if doc_type != "all" else None,
+                document_ids=document_ids
+            )
         
         retrieval_result = await self.retrieval.search_with_confidence(
             query=retrieval_query, 
@@ -545,6 +606,25 @@ class ChatService:
         
         logger.info(f"[STREAM] Retrieval completed in {retrieval_time_ms}ms, found {len(chunks)} chunks")
         logger.info(f"[STREAM] Confidence: {confidence}")
+        
+        # 🔄 If specific documents were uploaded, inject their full content as context
+        if document_ids:
+            logger.info(f"[STREAM] Injecting full content for {len(document_ids)} uploaded documents")
+            for doc_id in document_ids:
+                full_content = await self._get_full_document_content(doc_id)
+                if full_content:
+                    # Add as a high-priority chunk at the beginning
+                    full_doc_chunk = {
+                        "text": full_content[:5000],  # Cap at 5000 chars to avoid overwhelming context
+                        "title": f"Uploaded Document (Full)",
+                        "score": 1.0,  # Highest priority
+                        "source": "document",
+                        "document_id": doc_id,
+                    }
+                    chunks.insert(0, full_doc_chunk)  # Insert at beginning
+                    logger.info(f"[STREAM] Injected full document content ({len(full_content)} chars)")
+                else:
+                    logger.warning(f"[STREAM] Could not retrieve full content for document {doc_id}")
         
         if not chunks:
             logger.info(f"[STREAM] No chunks found, returning default response")

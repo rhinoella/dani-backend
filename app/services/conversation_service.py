@@ -192,6 +192,87 @@ class ConversationService:
         logger.info(f"Conversation updated: {conversation_id}")
         return updated
     
+    async def add_document_ids_to_conversation(
+        self,
+        conversation_id: Union[str, UUID],
+        document_ids: List[str]
+    ) -> bool:
+        """Add document IDs to conversation metadata for persistence across messages."""
+        conversation = await self.conv_repo.get_by_id(conversation_id)
+        if not conversation:
+            return False
+        
+        # Get existing metadata or create new
+        current_metadata = conversation.metadata_ or {}
+        
+        # Merge document IDs (avoid duplicates)
+        existing_doc_ids = current_metadata.get("document_ids", [])
+        merged_doc_ids = list(set(existing_doc_ids + document_ids))
+        
+        current_metadata["document_ids"] = merged_doc_ids
+        
+        logger.info(f"[CONV_SERVICE] Updating conversation {conversation_id} metadata with docs: {merged_doc_ids}")
+        
+        # Update conversation
+        await self.conv_repo.update(
+            conversation_id,
+            metadata=current_metadata
+        )
+        await self.session.commit()
+        
+        logger.info(f"Added {len(document_ids)} document_ids to conversation {conversation_id}")
+        return True
+    
+    async def add_attachments_to_conversation(
+        self,
+        conversation_id: Union[str, UUID],
+        attachments: List[dict]
+    ) -> bool:
+        """Add attachment metadata to conversation for UI persistence."""
+        conversation = await self.conv_repo.get_by_id(conversation_id)
+        if not conversation:
+            return False
+        
+        current_metadata = conversation.metadata_ or {}
+        
+        # Merge attachments avoid duplicates by ID
+        existing = current_metadata.get("active_attachments", [])
+        existing_ids = {a["id"] for a in existing}
+        
+        new_attachments = []
+        for att in attachments:
+            if att["id"] not in existing_ids:
+                new_attachments.append(att)
+                existing_ids.add(att["id"])
+        
+        if not new_attachments:
+            return True
+            
+        current_metadata["active_attachments"] = existing + new_attachments
+        
+        logger.info(f"[CONV_SERVICE] Updating conversation {conversation_id} metadata with attachments: {len(new_attachments)} new")
+        
+        await self.conv_repo.update(
+            conversation_id,
+            metadata=current_metadata
+        )
+        await self.session.commit()
+        return True
+    
+    async def get_conversation_document_ids(
+        self,
+        conversation_id: Union[str, UUID]
+    ) -> List[str]:
+        """Get document IDs associated with a conversation."""
+        conversation = await self.conv_repo.get_by_id(conversation_id)
+        if not conversation:
+            return []
+        
+        metadata = conversation.metadata_ or {}
+        doc_ids = metadata.get("document_ids", [])
+        logger.info(f"[CONV_SERVICE] Retrieved document_ids for {conversation_id}: {doc_ids} from metadata: {metadata}")
+        return doc_ids
+    
     async def delete_conversation(
         self,
         conversation_id: Union[str, UUID],
@@ -352,3 +433,75 @@ class ConversationService:
             "messages": messages,
             "metadata": conversation.metadata
         }
+    
+    async def edit_message(
+        self,
+        conversation_id: Union[str, UUID],
+        message_id: str,
+        user_id: Union[str, UUID],
+        new_content: str
+    ) -> Optional[Message]:
+        """
+        Edit a message content and soft-delete all subsequent messages.
+        This effectively 'rewinds' the conversation to this point.
+        Also stores the previous content + response in pairedHistory for version navigation.
+        """
+        from datetime import datetime
+
+        # Verify ownership via conversation
+        conversation = await self.get_conversation(conversation_id, user_id)
+        if not conversation:
+            return None
+            
+        # Get target message
+        message = await self.msg_repo.get_by_id(message_id)
+        if not message or message.conversation_id != str(conversation_id):
+            return None
+        
+        # Get the next message (assistant response) before we delete it
+        # so we can store it in pairedHistory
+        old_content = message.content
+        old_response = ""
+        
+        # Find the assistant response that followed this message
+        messages_after, _ = await self.msg_repo.get_context_messages(str(conversation_id), limit=50)
+        found_current = False
+        for m in messages_after:
+            if m.id == message_id:
+                found_current = True
+                continue
+            if found_current and m.role == "assistant":
+                old_response = m.content
+                break
+        
+        # Store in pairedHistory (append to existing if present)
+        metadata = message.metadata or {}
+        paired_history = metadata.get("paired_history", [])
+        paired_history.append({
+            "userContent": old_content,
+            "assistantContent": old_response
+        })
+        metadata["paired_history"] = paired_history
+        message.metadata = metadata
+            
+        # Update content
+        message.content = new_content
+        
+        # Soft delete subsequent messages
+        deleted_count = await self.msg_repo.soft_delete_after_message(str(conversation_id), message_id)
+        
+        # Update conversation message count
+        real_count = await self.msg_repo.count_by_conversation(str(conversation_id))
+        conversation.message_count = real_count
+        
+        await self.session.commit()
+        
+        logger.info(f"Message {message_id} edited, {deleted_count} subsequent messages deleted, pairedHistory now has {len(paired_history)} entries")
+        
+        # Invalidate caches
+        if self.conv_cache:
+            await self.conv_cache.invalidate(str(conversation_id))
+        if self.user_conv_cache:
+            await self.user_conv_cache.invalidate(user_id)
+            
+        return message

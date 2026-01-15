@@ -115,17 +115,30 @@ class Settings(BaseSettings):
     EMBEDDING_CACHE_MAX_SIZE: int = 500
     
     HYBRID_SEARCH_ENABLED: bool = True
-    HYBRID_VECTOR_WEIGHT: float = 0.5
-    HYBRID_KEYWORD_WEIGHT: float = 0.5
+    HYBRID_VECTOR_WEIGHT: float = 0.6
+    HYBRID_KEYWORD_WEIGHT: float = 0.4
     
     ADAPTIVE_RETRIEVAL_ENABLED: bool = True
-    ADAPTIVE_MIN_SIMILARITY: float = 0.05
+    ADAPTIVE_MIN_SIMILARITY: float = 0.35  # Raised from 0.05 - proper threshold for nomic-embed-text
     ADAPTIVE_MAX_CHUNKS: int = 20
     ADAPTIVE_MIN_CHUNKS: int = 3
     
     RERANKING_ENABLED: bool = True
     CROSS_ENCODER_ENABLED: bool = False
     CROSS_ENCODER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    
+    # Enhanced RAG settings for 90%+ accuracy
+    ENHANCED_RETRIEVAL_ENABLED: bool = True  # Enable multi-stage retrieval
+    QUERY_EXPANSION_ENABLED: bool = True  # Generate query variants
+    QUERY_EXPANSION_VARIANTS: int = 2  # Number of query variants
+    CONTEXTUAL_COMPRESSION_ENABLED: bool = True  # Compress chunks to relevant parts
+    LLM_RERANKING_ENABLED: bool = True  # Use LLM for re-ranking
+    MIN_RETRIEVAL_RELEVANCE: float = 0.60  # Minimum score after re-ranking
+    
+    # Enhanced memory settings
+    SEMANTIC_MEMORY_SEARCH_ENABLED: bool = True  # Search past messages semantically
+    ENTITY_EXTRACTION_ENABLED: bool = True  # Extract entities from conversations
+    TOPIC_SUMMARY_ENABLED: bool = True  # Generate topic summaries
     
     LLM_WARMUP_ENABLED: bool = True
     TIMING_DETAILED: bool = True

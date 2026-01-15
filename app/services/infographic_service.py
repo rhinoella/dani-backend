@@ -25,6 +25,7 @@ from sqlalchemy import select, desc
 from app.llm.ollama import OllamaClient
 from app.services.retrieval_service import RetrievalService
 from app.services.storage_service import StorageService
+from app.services.infographic_context import InfographicContextBuilder
 from app.schemas.retrieval import MetadataFilter
 from app.mcp.client import extract_all_content, extract_text
 from app.database.models.infographic import (
@@ -57,7 +58,7 @@ STYLE_PROMPTS = {
 
 
 # Prompt template for extracting structured infographic data
-EXTRACTION_PROMPT = """You are extracting data for an infographic from meeting/document context.
+EXTRACTION_PROMPT = """You are an expert data visualization specialist extracting data for a HIGH-IMPACT infographic.
 
 CONTEXT:
 {context}
@@ -67,25 +68,31 @@ USER REQUEST:
 
 Extract the following in JSON format:
 {{
-    "headline": "A catchy headline (8 words max)",
-    "subtitle": "Brief context line (15 words max)", 
+    "headline": "IMPACTFUL headline with specific data (4-8 words). MUST include a number, percentage, or specific metric. Examples: 'Q4 Revenue Surges 35% to $2.5M', 'Customer Retention Hits Record 94%'",
+    "subtitle": "Contextual supporting line (10-15 words)", 
     "stats": [
-        {{"value": "number or metric", "label": "what it represents", "icon": "suggested emoji"}},
-        // 4-6 stats total
+        {{"value": "$X.XM or XX%", "label": "Clear metric name", "icon": "💰📈🎯👥🌏📊"}},
+        // EXACTLY 4-5 stats. Each MUST have a numeric value with unit (%, $, x, etc.)
     ],
     "key_points": [
-        "Key insight or fact 1",
-        "Key insight or fact 2",
-        // 3-5 points
+        "Specific insight with numbers: 'Enterprise sales grew 45% YoY'",
+        "Actionable finding with data: 'APAC region outperformed at 52% growth'",
+        // EXACTLY 3-4 points. Each MUST be 8-15 words with specific data
     ],
-    "source_summary": "Brief note on data source (meeting name/date)"
+    "source_summary": "Meeting/document name with date"
 }}
 
-Rules:
-- Use ONLY facts from the context
-- Numbers and metrics are preferred for stats
-- Keep all text concise and impactful
-- If data is insufficient, use what's available
+CRITICAL QUALITY RULES:
+1. HEADLINE: Must be impactful with specific numbers. NEVER use generic words like 'Summary', 'Overview', 'Report'
+2. STATS: Every stat MUST have a numeric value (e.g., '$2.5M', '35%', '120', '4.1x'). NO vague words like 'High', 'Good', 'Strong'
+3. ICONS: Every stat MUST have an emoji icon (💰📈🎯👥🌏📊🚀💡✅)
+4. KEY POINTS: Each point must include specific numbers/percentages from the context
+5. Extract ALL numbers mentioned in the context - they are valuable data points
+
+If the context lacks specific numbers, look for:
+- Dates, counts, percentages, dollar amounts
+- Comparisons (up/down, before/after)
+- Rankings, scores, ratings
 
 Output ONLY valid JSON:"""
 
@@ -103,6 +110,7 @@ class InfographicService:
         self.llm = OllamaClient()
         self.retrieval = RetrievalService()
         self.storage = StorageService()
+        self.context_builder = InfographicContextBuilder()
         self._mcp_registry = None
 
     @property
@@ -128,6 +136,7 @@ class InfographicService:
         user_id: Optional[str] = None,
         db: Optional[AsyncSession] = None,
         persist: bool = True,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """
         Generate a visual infographic.
@@ -142,6 +151,8 @@ class InfographicService:
             user_id: Optional user ID for ownership
             db: Database session for persistence
             persist: Whether to save to S3/database (default True)
+            conversation_history: Optional list of previous messages in the conversation
+                                  for better context understanding
 
         Returns:
             Dict with image data, structured content, and metadata
@@ -151,7 +162,7 @@ class InfographicService:
         
         logger.info(f"[INFOGRAPHIC] Generating infographic: {request[:100]}...")
 
-        # Step 1: Retrieve relevant context
+        # Step 1: Retrieve relevant context using enhanced context builder
         retrieval_start = time.time()
         search_query = topic or request
         
@@ -162,52 +173,133 @@ class InfographicService:
             # We switch to "all" to bypass the filter.
             doc_type = "all"
 
-        metadata_filter = None
-        if doc_type and doc_type != "all":
-            metadata_filter = MetadataFilter(
-                doc_type=doc_type,
-                speakers=None,
-                source_file=None,
-                date_from=None,
-                date_to=None,
-                transcript_id=None,
+        # Use enhanced context builder if conversation history is available
+        if conversation_history and settings.ENHANCED_RETRIEVAL_ENABLED:
+            enhanced_context = await self.context_builder.build_context(
+                request=search_query,
+                conversation_history=conversation_history,
+                doc_type=doc_type if doc_type != "all" else None,
             )
-
-        retrieval_result = await self.retrieval.search_with_confidence(
-            query=search_query,
-            limit=8,
-            metadata_filter=metadata_filter,
-        )
-        chunks = retrieval_result["chunks"]
-        confidence = retrieval_result["confidence"]
-        retrieval_ms = round((time.time() - retrieval_start) * 1000, 2)
-        
-        logger.info(f"[INFOGRAPHIC] Retrieved {len(chunks)} chunks in {retrieval_ms}ms")
-
-        if not chunks:
-            return {
-                "error": "No relevant context found for the infographic",
-                "suggestion": "Try a different topic or broader search terms",
-            }
-
-        # Step 2: Format context
-        context_parts = []
-        sources = []
-        
-        for chunk in chunks:
-            title = chunk.get("title") or "Untitled"
-            text = chunk.get("text", "")
-            date = chunk.get("date")
             
-            context_parts.append(f"From '{title}' ({date or 'undated'}):\n{text}")
-            sources.append({
-                "title": title,
-                "date": date,
-                "text_preview": text[:1000],
-                "score": chunk.get("score", 0),
-            })
+            # Check for errors from context builder
+            if "error" in enhanced_context:
+                return {
+                    "error": enhanced_context.get("error"),
+                    "suggestion": "Try a different topic or broader search terms",
+                }
+            
+            # Get structured data and sources from the enhanced context
+            structured_data = enhanced_context.get("structured_data", {})
+            raw_context = enhanced_context.get("raw_context", {})
+            sources = enhanced_context.get("sources", [])
+            chunks_used = enhanced_context.get("chunks_used", 0)
+            retrieval_ms = round((time.time() - retrieval_start) * 1000, 2)
+            
+            # Use raw context for any further processing
+            context = raw_context.get("rag", "") + "\n\n" + raw_context.get("conversation", "")
+            
+            logger.info(f"[INFOGRAPHIC] Enhanced context built in {retrieval_ms}ms with {chunks_used} chunks")
+            
+            # If structured data already extracted, skip to image generation
+            if structured_data and "error" not in structured_data:
+                logger.info(f"[INFOGRAPHIC] Using pre-extracted structured data from enhanced context")
+                
+                # Step 4: Generate visual infographic via MCP
+                image_start = time.time()
+                image_result = await self._generate_image(structured_data, style, width, height)
+                image_ms = round((time.time() - image_start) * 1000, 2)
 
-        context = "\n\n---\n\n".join(context_parts)
+                if "error" in image_result:
+                    result = {
+                        "id": None,
+                        "structured_data": structured_data,
+                        "image": None,
+                        "image_error": image_result["error"],
+                        "sources": sources,
+                        "timing": {
+                            "retrieval_ms": retrieval_ms,
+                            "extraction_ms": 0,  # Already extracted by context builder
+                            "image_generation_ms": image_ms,
+                            "total_ms": round((time.time() - start_time) * 1000, 2),
+                        },
+                    }
+                else:
+                    result = {
+                        "id": None,
+                        "structured_data": structured_data,
+                        **image_result,
+                        "sources": sources,
+                        "timing": {
+                            "retrieval_ms": retrieval_ms,
+                            "extraction_ms": 0,
+                            "image_generation_ms": image_ms,
+                            "total_ms": round((time.time() - start_time) * 1000, 2),
+                        },
+                    }
+
+                # Persist if requested
+                if persist and db:
+                    infographic_id = await self._persist_infographic(
+                        db=db,
+                        user_id=user_id,
+                        request=request,
+                        style=style,
+                        structured_data=structured_data,
+                        image_result=image_result,
+                        sources=sources,
+                        result=result,
+                    )
+                    result["id"] = infographic_id
+
+                return result
+        else:
+            # Fallback to standard retrieval
+            metadata_filter = None
+            if doc_type and doc_type != "all":
+                metadata_filter = MetadataFilter(
+                    doc_type=doc_type,
+                    speakers=None,
+                    source_file=None,
+                    date_from=None,
+                    date_to=None,
+                    transcript_id=None,
+                )
+
+            retrieval_result = await self.retrieval.search_with_confidence(
+                query=search_query,
+                limit=8,
+                metadata_filter=metadata_filter,
+            )
+            chunks = retrieval_result["chunks"]
+            confidence = retrieval_result["confidence"]
+            retrieval_ms = round((time.time() - retrieval_start) * 1000, 2)
+            
+            logger.info(f"[INFOGRAPHIC] Retrieved {len(chunks)} chunks in {retrieval_ms}ms")
+
+            if not chunks:
+                return {
+                    "error": "No relevant context found for the infographic",
+                    "suggestion": "Try a different topic or broader search terms",
+                }
+
+            # Step 2: Format context (standard flow)
+            context_parts = []
+            sources = []
+            
+            for chunk in chunks:
+                title = chunk.get("title") or "Untitled"
+                text = chunk.get("text", "")
+                date = chunk.get("date")
+                
+                context_parts.append(f"From '{title}' ({date or 'undated'}):\n{text}")
+                sources.append({
+                    "title": title,
+                    "date": date,
+                    "text_preview": text[:1000],
+                    "score": chunk.get("score", 0),
+                })
+
+            context = "\n\n---\n\n".join(context_parts)
 
         # Step 3: Extract structured data
         extraction_start = time.time()
@@ -217,7 +309,10 @@ class InfographicService:
         if "error" in structured_data:
             return structured_data
 
-        logger.info(f"[INFOGRAPHIC] Extracted structured data in {extraction_ms}ms")
+        # Step 3.5: Validate and enhance quality
+        structured_data = self._validate_and_enhance_quality(structured_data, chunks)
+        
+        logger.info(f"[INFOGRAPHIC] Extracted and enhanced structured data in {extraction_ms}ms")
 
         # Step 4: Generate visual infographic via MCP
         image_start = time.time()
@@ -473,6 +568,97 @@ class InfographicService:
         except Exception as e:
             logger.error(f"[INFOGRAPHIC] Image generation failed: {e}")
             return {"error": f"Image generation failed: {str(e)}"}
+
+    def _validate_and_enhance_quality(
+        self,
+        structured_data: Dict[str, Any],
+        context_chunks: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Validate and enhance structured data quality.
+        
+        Fixes common issues:
+        1. Generic headlines without numbers
+        2. Stats with vague values like 'High', 'Good'
+        3. Missing icons on stats
+        4. Key points without specific data
+        
+        Returns enhanced structured data.
+        """
+        enhanced = structured_data.copy()
+        
+        # Extract all numbers from context for reference
+        context_text = " ".join([c.get("text", "") for c in context_chunks])
+        context_numbers = re.findall(
+            r'\$[\d,.]+[MBK]?|\d+(?:\.\d+)?%|\d+(?:\.\d+)?x|\d{1,3}(?:,\d{3})*(?:\.\d+)?',
+            context_text
+        )
+        
+        # Fix headline if too generic
+        headline = enhanced.get("headline", "")
+        generic_words = ["summary", "overview", "report", "information", "update", "meeting"]
+        if any(word in headline.lower() for word in generic_words) or len(headline.split()) < 4:
+            # Try to make headline more impactful with numbers
+            if context_numbers:
+                top_numbers = context_numbers[:2]
+                if "%" in str(top_numbers):
+                    enhanced["headline"] = f"Key Metrics: {top_numbers[0]} Achievement"
+                elif "$" in str(top_numbers):
+                    enhanced["headline"] = f"Revenue Highlights: {top_numbers[0]}"
+                else:
+                    enhanced["headline"] = f"Performance Summary: {top_numbers[0]} Results"
+        
+        # Fix stats - ensure numeric values and icons
+        stats = enhanced.get("stats", [])
+        icon_defaults = ["💰", "📈", "🎯", "👥", "🌏", "📊", "🚀", "💡", "✅", "🏆"]
+        vague_values = ["high", "good", "strong", "low", "improved", "increased", "significant"]
+        
+        fixed_stats = []
+        used_numbers = set()
+        
+        for i, stat in enumerate(stats):
+            value = str(stat.get("value", "")).strip()
+            label = stat.get("label", "Metric")
+            icon = stat.get("icon", "")
+            
+            # Fix vague values
+            if value.lower() in vague_values or not re.search(r'\d', value):
+                # Try to find an unused number from context
+                for num in context_numbers:
+                    if num not in used_numbers:
+                        value = num
+                        used_numbers.add(num)
+                        break
+            else:
+                used_numbers.add(value)
+            
+            # Add icon if missing
+            if not icon or icon.strip() == "":
+                icon = icon_defaults[i % len(icon_defaults)]
+            
+            fixed_stats.append({
+                "value": value,
+                "label": label,
+                "icon": icon,
+                **{k: v for k, v in stat.items() if k not in ["value", "label", "icon"]}
+            })
+        
+        enhanced["stats"] = fixed_stats
+        
+        # Fix key points - ensure they have specifics
+        key_points = enhanced.get("key_points", [])
+        fixed_points = []
+        
+        for point in key_points:
+            point_str = str(point)
+            # If point is too vague, try to add context
+            if len(point_str.split()) < 5:
+                point_str = f"{point_str} based on recent data"
+            fixed_points.append(point_str)
+        
+        enhanced["key_points"] = fixed_points
+        
+        return enhanced
 
     def _build_image_prompt(
         self, 

@@ -261,9 +261,17 @@ class DocumentService:
             
             logger.info(f"Created {len(chunk_records)} chunks")
             
-            # 3) Embed chunks
-            texts = [c["text"] for c in chunk_records]
-            vectors = await self.embedder.embed_batch(texts)
+            # 3) Embed chunks with contextual enrichment and proper prefix
+            # Enrich text with metadata for better semantic matching
+            texts = []
+            for c in chunk_records:
+                title = document.title or document.filename
+                # Include context in the text for better embedding quality
+                enriched_text = f"Document: {title}. Content: {c['text']}"
+                texts.append(enriched_text)
+            
+            # Use embed_documents() which adds the search_document: prefix for nomic-embed-text
+            vectors = await self.embedder.embed_documents(texts)
             vector_size = len(vectors[0])
             
             # 4) Ensure collection exists
@@ -280,6 +288,7 @@ class DocumentService:
                 
                 payload = {
                     "source": "document",
+                    "doc_type": "document",  # Document type for filtering
                     "document_id": document.id,
                     "filename": document.filename,
                     "file_type": document.file_type.value,
@@ -288,6 +297,7 @@ class DocumentService:
                     "chunk_index": i,
                     "token_count": token_count,
                     "text": chunk["text"],
+                    "speakers": [],  # Documents don't have speakers
                     **{k: v for k, v in metadata.items() if k not in ["token_count"]},
                 }
                 

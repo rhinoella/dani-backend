@@ -133,13 +133,14 @@ class TestMessageRepository:
                 metadata={"key": "value"}
             )
             
+            # The actual implementation uses metadata_ instead of metadata
             mock_create.assert_called_once_with(
                 conversation_id="conv-456",
                 role="user",
                 content="Hello!",
                 sources=[{"doc": "test.pdf"}],
                 confidence_score=0.9,
-                metadata={"key": "value"}
+                metadata_={"key": "value"}
             )
             assert result == sample_message
     

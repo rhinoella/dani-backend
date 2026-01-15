@@ -228,7 +228,7 @@ class TestMigration:
         """Test that migration file exists."""
         import os
         
-        migration_path = "alembic/versions/004_add_infographics_table.py"
+        migration_path = "alembic/versions/005_add_infographics_table.py"
         full_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             migration_path
@@ -239,9 +239,11 @@ class TestMigration:
 
     def test_migration_has_upgrade_and_downgrade(self):
         """Test migration has both upgrade and downgrade functions."""
+        import os
+        
         migration_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
-            "alembic/versions/004_add_infographics_table.py"
+            "alembic/versions/005_add_infographics_table.py"
         )
         
         with open(migration_path, 'r') as f:
@@ -250,6 +252,3 @@ class TestMigration:
         assert "def upgrade()" in content
         assert "def downgrade()" in content
         assert "create_table" in content or "op.create_table" in content
-
-
-import os

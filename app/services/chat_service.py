@@ -12,6 +12,7 @@ from app.core.metrics import metrics
 from app.services.retrieval_service import RetrievalService
 from app.services.query_rewriter import QueryRewriter, get_query_rewriter
 from app.services.agent_service import get_agent_service, Intent
+from app.services.enhanced_retrieval import EnhancedRetriever, EnhancedRetrievalConfig
 from app.llm.ollama import OllamaClient
 from app.llm.prompt_builder import PromptBuilder
 from app.llm.output_validator import OutputValidator
@@ -32,13 +33,27 @@ class ChatService:
     - Structured output support
     """
 
-    def __init__(self) -> None:
+    def __init__(self, use_enhanced_retrieval: bool = False) -> None:
         self.retrieval = RetrievalService()
         self.llm = OllamaClient()
         self.prompt_builder = PromptBuilder()
         self.validator = OutputValidator()
         self.confidence_scorer = ConfidenceScorer()
         self.query_rewriter = get_query_rewriter()
+        
+        # Enhanced retrieval for higher accuracy (optional)
+        self.use_enhanced_retrieval = use_enhanced_retrieval
+        if use_enhanced_retrieval:
+            self.enhanced_retriever = EnhancedRetriever(
+                self.retrieval,
+                EnhancedRetrievalConfig(
+                    expand_queries=True,
+                    num_query_variants=2,
+                    use_reranking=True,
+                    compress_chunks=True,
+                    min_relevance_score=0.60,
+                )
+            )
         
         # Response cache for full LLM responses
         self._response_cache = ResponseCache(

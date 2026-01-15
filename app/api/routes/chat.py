@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.services.chat_service import ChatService
 from app.services.conversation_service import ConversationService
 from app.services.memory_service import MemoryService
+from app.services.enhanced_memory import EnhancedMemoryService
 from app.services.rag_analytics_service import RAGAnalyticsService
 from app.api.deps import (
     get_db, 
@@ -180,11 +181,33 @@ async def chat(
             
             # Load conversation history for context if authenticated and requested
             conversation_history = []
+            enhanced_context = None
             if current_user and conversation_id and req.include_history:
                 try:
                     logger.info(f"[CHAT] Loading conversation history for streaming context")
-                    memory_service = MemoryService(db, conv_cache)
-                    conversation_history = await memory_service.get_context_for_chat(conversation_id)
+                    
+                    # Use enhanced memory if enabled
+                    if settings.SEMANTIC_MEMORY_SEARCH_ENABLED:
+                        logger.info(f"[CHAT] Using enhanced semantic memory search")
+                        enhanced_memory = EnhancedMemoryService(db, conv_cache)
+                        enhanced_context = await enhanced_memory.get_enhanced_context(
+                            conversation_id=conversation_id,
+                            current_query=req.query,
+                        )
+                        conversation_history = enhanced_context.messages
+                        
+                        # Log enhanced context info
+                        if enhanced_context.relevant_history:
+                            logger.info(f"[CHAT] Found {len(enhanced_context.relevant_history)} semantically relevant past messages")
+                        if enhanced_context.entities:
+                            logger.info(f"[CHAT] Extracted entities: {list(enhanced_context.entities.keys())}")
+                        if enhanced_context.topic_summary:
+                            logger.info(f"[CHAT] Topic summary available for context")
+                    else:
+                        # Fallback to standard memory service
+                        memory_service = MemoryService(db, conv_cache)
+                        conversation_history = await memory_service.get_context_for_chat(conversation_id)
+                    
                     logger.info(f"[CHAT] Loaded {len(conversation_history)} history messages for streaming")
                 except Exception as e:
                     logger.warning(f"[CHAT] Failed to load conversation history: {e}")
@@ -322,8 +345,20 @@ async def chat(
             history_context = []
             if current_user and conversation_id and req.include_history:
                 logger.info(f"[CHAT] Loading conversation history for context")
-                memory_service = MemoryService(db, conv_cache)
-                history_context = await memory_service.get_context_for_chat(conversation_id)
+                
+                # Use enhanced memory if enabled
+                if settings.SEMANTIC_MEMORY_SEARCH_ENABLED:
+                    logger.info(f"[CHAT] Using enhanced semantic memory search for non-streaming")
+                    enhanced_memory = EnhancedMemoryService(db, conv_cache)
+                    enhanced_context = await enhanced_memory.get_enhanced_context(
+                        conversation_id=conversation_id,
+                        current_query=req.query,
+                    )
+                    history_context = enhanced_context.messages
+                else:
+                    memory_service = MemoryService(db, conv_cache)
+                    history_context = await memory_service.get_context_for_chat(conversation_id)
+                    
                 logger.info(f"[CHAT] Loaded {len(history_context)} history items")
             
             result = await service.answer(

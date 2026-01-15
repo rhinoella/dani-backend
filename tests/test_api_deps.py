@@ -187,36 +187,29 @@ class TestGetCurrentUser:
     
     @pytest.mark.asyncio
     async def test_get_current_user_success(self):
-        """Test getting current user creates/updates user."""
-        mock_google_user = GoogleUser(
-            google_id="123",
-            email="test@example.com",
-            name="Test User",
-            picture_url=None,
-            email_verified=True,
-        )
+        """Test getting current user from JWT token."""
+        mock_credentials = MagicMock()
+        mock_credentials.credentials = "valid-jwt-token"
         
         mock_db = AsyncMock()
         mock_user = MagicMock()
         mock_user.id = "user-123"
         
-        with patch("app.api.deps.UserRepository") as MockRepo:
+        mock_payload = MagicMock()
+        mock_payload.sub = "user-123"
+        
+        with patch("app.api.deps.verify_access_token", return_value=mock_payload), \
+             patch("app.api.deps.UserRepository") as MockRepo:
             mock_repo = MockRepo.return_value
-            mock_repo.create_or_update_from_google = AsyncMock(return_value=mock_user)
+            mock_repo.get_by_id = AsyncMock(return_value=mock_user)
             
             result = await get_current_user(
-                google_user=mock_google_user,
+                credentials=mock_credentials,
                 db=mock_db
             )
             
             assert result == mock_user
-            mock_repo.create_or_update_from_google.assert_called_once_with(
-                google_id="123",
-                email="test@example.com",
-                name="Test User",
-                picture_url=None,
-            )
-            mock_db.commit.assert_called_once()
+            mock_repo.get_by_id.assert_called_once_with("user-123")
 
 
 class TestGetOptionalUser:
@@ -253,11 +246,10 @@ class TestGetOptionalUser:
     
     @pytest.mark.asyncio
     async def test_get_optional_user_dev_mode_creates_user(self):
-        """Test dev mode creates user if not exists."""
+        """Test dev mode returns None if user not exists (doesn't auto-create)."""
         mock_credentials = MagicMock()
         mock_credentials.credentials = "test-token"
         mock_db = AsyncMock()
-        mock_user = MagicMock()
         
         with patch("app.api.deps.settings") as mock_settings, \
              patch("app.api.deps.UserRepository") as MockRepo:
@@ -266,12 +258,11 @@ class TestGetOptionalUser:
             
             mock_repo = MockRepo.return_value
             mock_repo.get_by_google_id = AsyncMock(return_value=None)
-            mock_repo.create_or_update_from_google = AsyncMock(return_value=mock_user)
             
             result = await get_optional_user(credentials=mock_credentials, db=mock_db)
             
-            assert result == mock_user
-            mock_repo.create_or_update_from_google.assert_called_once()
+            # Dev mode returns None if user doesn't exist (doesn't auto-create)
+            assert result is None
     
     @pytest.mark.asyncio
     async def test_get_optional_user_invalid_token(self):

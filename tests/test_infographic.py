@@ -71,7 +71,7 @@ class TestInfographicService:
         ]
         
         mock_structured = {
-            "headline": "Mobile Strategy 2025",
+            "headline": "Mobile Strategy Targets 35% Growth",
             "subtitle": "Key milestones and metrics",
             "stats": [
                 {"value": "March 2025", "label": "Launch Date", "icon": "📱"},
@@ -98,7 +98,7 @@ class TestInfographicService:
 
         # Should have structured data even if image fails
         assert "structured_data" in result
-        assert result["structured_data"]["headline"] == "Mobile Strategy 2025"
+        assert result["structured_data"]["headline"] == "Mobile Strategy Targets 35% Growth"
         assert len(result["structured_data"]["stats"]) == 2
         assert "image_error" in result  # Image generation failed (no MCP)
 
@@ -156,21 +156,22 @@ class TestInfographicService:
 
     @pytest.mark.asyncio
     async def test_generate_with_doc_type_filter(self):
-        """Should pass doc_type filter to retrieval."""
+        """Should pass doc_type filter to retrieval (non-meeting types)."""
         self.service.retrieval.search_with_confidence = AsyncMock(return_value={
             "chunks": [],
             "confidence": {"level": "none", "metrics": {}},
         })
 
+        # Use 'document' type to test filter passing (meeting has special handling)
         await self.service.generate(
-            request="Meeting infographic",
-            doc_type="meeting",
+            request="Document infographic",
+            doc_type="document",
         )
 
         # Check that filter was passed
         call_args = self.service.retrieval.search_with_confidence.call_args
         assert call_args.kwargs["metadata_filter"] is not None
-        assert call_args.kwargs["metadata_filter"].doc_type == "meeting"
+        assert call_args.kwargs["metadata_filter"].doc_type == "document"
 
     @pytest.mark.asyncio
     async def test_extract_structured_data_json_cleanup(self):

@@ -85,13 +85,18 @@ def mock_document_response():
 
 
 @pytest.fixture
-def app(mock_document_service):
+def app(mock_document_service, mock_user):
     """Create test FastAPI app."""
+    from app.api.deps import get_optional_user, get_current_user, get_db
+    
     app = FastAPI()
     app.include_router(router)
     
     # Override dependencies
     app.dependency_overrides[get_document_service] = lambda: mock_document_service
+    app.dependency_overrides[get_optional_user] = lambda: mock_user
+    app.dependency_overrides[get_current_user] = lambda: mock_user
+    app.dependency_overrides[get_db] = lambda: AsyncMock()
     
     return app
 
@@ -104,19 +109,27 @@ def client(app):
 
 # ============== Tests ==============
 
+def create_mock_upload_result(doc_id: str, filename: str, file_type: str, file_size: int):
+    """Create a mock object with the expected attributes from upload_document."""
+    mock_result = MagicMock()
+    mock_result.id = doc_id
+    mock_result.filename = filename
+    mock_result.file_type = file_type
+    mock_result.file_size = file_size
+    mock_result.status = "processing"
+    mock_result.message = "Document uploaded successfully"
+    return mock_result
+
+
 class TestUploadEndpoint:
     """Tests for POST /documents/upload endpoint."""
     
     def test_upload_pdf_success(self, client, mock_document_service, mock_document_response, mock_storage_service):
         """Test successful PDF upload."""
-        mock_document_service.upload_document = AsyncMock(return_value={
-            "id": mock_document_response["id"],
-            "filename": "test.pdf",
-            "file_type": "pdf",
-            "file_size": 26,
-            "status": "processing",
-            "message": "Document uploaded successfully",
-        })
+        mock_result = create_mock_upload_result(
+            mock_document_response["id"], "test.pdf", "pdf", 26
+        )
+        mock_document_service.upload_document = AsyncMock(return_value=mock_result)
         
         # Create fake PDF content
         pdf_content = b"%PDF-1.4 fake pdf content"
@@ -131,14 +144,10 @@ class TestUploadEndpoint:
     
     def test_upload_docx_success(self, client, mock_document_service, mock_document_response, mock_storage_service):
         """Test successful DOCX upload."""
-        mock_document_service.upload_document = AsyncMock(return_value={
-            "id": mock_document_response["id"],
-            "filename": "test.docx",
-            "file_type": "docx",
-            "file_size": 20,
-            "status": "processing",
-            "message": "Document uploaded successfully",
-        })
+        mock_result = create_mock_upload_result(
+            mock_document_response["id"], "test.docx", "docx", 20
+        )
+        mock_document_service.upload_document = AsyncMock(return_value=mock_result)
         
         docx_content = b"PK fake docx content"
         
@@ -152,14 +161,10 @@ class TestUploadEndpoint:
     
     def test_upload_txt_success(self, client, mock_document_service, mock_document_response, mock_storage_service):
         """Test successful TXT upload."""
-        mock_document_service.upload_document = AsyncMock(return_value={
-            "id": mock_document_response["id"],
-            "filename": "test.txt",
-            "file_type": "txt",
-            "file_size": 35,
-            "status": "processing",
-            "message": "Document uploaded successfully",
-        })
+        mock_result = create_mock_upload_result(
+            mock_document_response["id"], "test.txt", "txt", 35
+        )
+        mock_document_service.upload_document = AsyncMock(return_value=mock_result)
         
         txt_content = b"Hello, this is plain text content."
         
@@ -198,14 +203,10 @@ class TestUploadEndpoint:
     
     def test_upload_with_title_and_description(self, client, mock_document_service, mock_document_response, mock_storage_service):
         """Test upload with optional title and description."""
-        mock_document_service.upload_document = AsyncMock(return_value={
-            "id": mock_document_response["id"],
-            "filename": "test.txt",
-            "file_type": "txt",
-            "file_size": 7,
-            "status": "processing",
-            "message": "Document uploaded successfully",
-        })
+        mock_result = create_mock_upload_result(
+            mock_document_response["id"], "test.txt", "txt", 7
+        )
+        mock_document_service.upload_document = AsyncMock(return_value=mock_result)
         
         response = client.post(
             "/documents/upload",
@@ -455,14 +456,10 @@ class TestContentTypeValidation:
     
     def test_pdf_content_type_accepted(self, client, mock_document_service, mock_document_response, mock_storage_service):
         """Test application/pdf is accepted."""
-        mock_document_service.upload_document = AsyncMock(return_value={
-            "id": mock_document_response["id"],
-            "filename": "test.pdf",
-            "file_type": "pdf",
-            "file_size": 7,
-            "status": "processing",
-            "message": "Document uploaded successfully",
-        })
+        mock_result = create_mock_upload_result(
+            mock_document_response["id"], "test.pdf", "pdf", 7
+        )
+        mock_document_service.upload_document = AsyncMock(return_value=mock_result)
         
         response = client.post(
             "/documents/upload",
@@ -473,14 +470,10 @@ class TestContentTypeValidation:
     
     def test_docx_content_type_accepted(self, client, mock_document_service, mock_document_response, mock_storage_service):
         """Test DOCX mime type is accepted."""
-        mock_document_service.upload_document = AsyncMock(return_value={
-            "id": mock_document_response["id"],
-            "filename": "test.docx",
-            "file_type": "docx",
-            "file_size": 7,
-            "status": "processing",
-            "message": "Document uploaded successfully",
-        })
+        mock_result = create_mock_upload_result(
+            mock_document_response["id"], "test.docx", "docx", 7
+        )
+        mock_document_service.upload_document = AsyncMock(return_value=mock_result)
         
         mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         response = client.post(
@@ -492,14 +485,10 @@ class TestContentTypeValidation:
     
     def test_plain_text_content_type_accepted(self, client, mock_document_service, mock_document_response, mock_storage_service):
         """Test text/plain is accepted."""
-        mock_document_service.upload_document = AsyncMock(return_value={
-            "id": mock_document_response["id"],
-            "filename": "test.txt",
-            "file_type": "txt",
-            "file_size": 7,
-            "status": "processing",
-            "message": "Document uploaded successfully",
-        })
+        mock_result = create_mock_upload_result(
+            mock_document_response["id"], "test.txt", "txt", 7
+        )
+        mock_document_service.upload_document = AsyncMock(return_value=mock_result)
         
         response = client.post(
             "/documents/upload",

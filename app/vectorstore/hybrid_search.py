@@ -18,6 +18,9 @@ from collections import Counter
 
 from app.core.config import settings
 
+# Note: settings is used for HYBRID_VECTOR_WEIGHT, HYBRID_KEYWORD_WEIGHT,
+# ADAPTIVE_MIN_SIMILARITY, ADAPTIVE_MAX_CHUNKS, ADAPTIVE_MIN_CHUNKS
+
 logger = logging.getLogger(__name__)
 
 # Lazy load cross-encoder to avoid import overhead when not used
@@ -182,16 +185,18 @@ class HybridSearcher:
     Combines vector search with keyword search using Reciprocal Rank Fusion.
     
     Optimized for meeting transcripts with proper nouns, names, and specific terms.
+    Now reads weights from settings for configurability.
     """
     
     def __init__(
         self,
-        vector_weight: float = 0.6,   # Reduced from 0.7 - keywords matter for names
-        keyword_weight: float = 0.4,  # Increased from 0.3
+        vector_weight: Optional[float] = None,
+        keyword_weight: Optional[float] = None,
         rrf_k: int = 40,  # Reduced from 60 for better ranking with smaller result sets
     ):
-        self.vector_weight = vector_weight
-        self.keyword_weight = keyword_weight
+        # Use settings if not explicitly provided
+        self.vector_weight = vector_weight if vector_weight is not None else settings.HYBRID_VECTOR_WEIGHT
+        self.keyword_weight = keyword_weight if keyword_weight is not None else settings.HYBRID_KEYWORD_WEIGHT
         self.rrf_k = rrf_k
         self.keyword_searcher = KeywordSearcher()
     
@@ -293,20 +298,22 @@ class AdaptiveRetriever:
     """
     Adaptive top-k retrieval that adjusts based on relevance score drop-off.
     
-    Calibrated for raw cosine similarity which is typically 0.05-0.30 
-    for conversational content like meeting transcripts.
+    With proper embedding prefixes (search_query/search_document), nomic-embed-text
+    produces similarity scores in the 0.3-0.8 range for relevant content.
+    Now reads thresholds from settings for configurability.
     """
     
     def __init__(
         self,
-        min_similarity: float = 0.05,   # Lowered from 0.65 - raw cosine is low
-        max_chunks: int = 20,           # Increased from 15
-        min_chunks: int = 3,
-        drop_off_threshold: float = 0.05,  # Lowered from 0.15 - score differences are smaller
+        min_similarity: Optional[float] = None,
+        max_chunks: Optional[int] = None,
+        min_chunks: Optional[int] = None,
+        drop_off_threshold: float = 0.10,  # 10% drop-off threshold
     ):
-        self.min_similarity = min_similarity
-        self.max_chunks = max_chunks
-        self.min_chunks = min_chunks
+        # Use settings if not explicitly provided
+        self.min_similarity = min_similarity if min_similarity is not None else settings.ADAPTIVE_MIN_SIMILARITY
+        self.max_chunks = max_chunks if max_chunks is not None else settings.ADAPTIVE_MAX_CHUNKS
+        self.min_chunks = min_chunks if min_chunks is not None else settings.ADAPTIVE_MIN_CHUNKS
         self.drop_off_threshold = drop_off_threshold
     
     def filter_results(

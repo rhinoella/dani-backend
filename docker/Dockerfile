@@ -81,10 +81,18 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 USER dani
 
 # Conditional CMD based on BUILD_ENV
-# Development: use --reload for hot-reloading
-# Production: use multiple workers, no reload
+# Development: uvicorn with --reload for hot-reloading
+# Production: gunicorn with uvicorn workers for robust process management
 CMD if [ "$BUILD_ENV" = "production" ]; then \
-    uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers ${WORKERS:-4}; \
+    gunicorn app.main:app \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --workers ${WORKERS:-4} \
+    --bind 0.0.0.0:8000 \
+    --timeout ${TIMEOUT:-120} \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
+    --access-logfile - \
+    --error-logfile -; \
     else \
     uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload; \
     fi

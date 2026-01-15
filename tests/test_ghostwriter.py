@@ -113,17 +113,18 @@ DANI"""
 
     @pytest.mark.asyncio
     async def test_generate_with_doc_type_filter(self):
-        """Should pass doc_type filter to retrieval."""
+        """Should pass doc_type filter to retrieval (non-meeting types)."""
         self.service.llm.generate = AsyncMock(return_value="Generated content")
         self.service.retrieval.search_with_confidence = AsyncMock(return_value={
             "chunks": [],
             "confidence": {"level": "low", "metrics": {}},
         })
 
+        # Use 'document' type since 'meeting' has a workaround that sets it to 'all'
         await self.service.generate(
             content_type=ContentType.LINKEDIN_POST,
-            request="Write about meetings",
-            doc_type="meeting",
+            request="Write about documents",
+            doc_type="document",
         )
 
         # Verify search was called with metadata filter

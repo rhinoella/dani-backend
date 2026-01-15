@@ -58,10 +58,20 @@ class IngestionService:
 
         logger.info(f"Processing {len(chunks)} chunks for transcript {transcript_id}")
 
-        # 3) embed chunks
+        # 3) embed chunks with contextual enrichment and proper prefix
         try:
-            texts = [c["text"] for c in chunks]
-            vectors = await self.embedder.embed_batch(texts)
+            # Enrich text with metadata for better semantic matching
+            texts = []
+            for c in chunks:
+                metadata = c.get("metadata", {})
+                title = transcript.get("title", "Unknown meeting")
+                speaker = metadata.get("speaker", "Unknown")
+                # Include context in the text for better embedding quality
+                enriched_text = f"Meeting: {title}. Speaker: {speaker}. Content: {c['text']}"
+                texts.append(enriched_text)
+            
+            # Use embed_documents() which adds the search_document: prefix for nomic-embed-text
+            vectors = await self.embedder.embed_documents(texts)
             vector_size = len(vectors[0])
         except Exception as e:
             logger.error(f"Embedding failed for transcript {transcript_id}: {e}")
@@ -79,14 +89,21 @@ class IngestionService:
         for i, (c, v) in enumerate(zip(chunks, vectors)):
             # Build payload (metadata)
             metadata = c.get("metadata", {})
+            
+            # Get speakers list - handle both "speaker" (singular) and "speakers" (list)
+            speakers_list = metadata.get("speakers", [])
+            if not speakers_list and metadata.get("speaker"):
+                speakers_list = [metadata.get("speaker")]
+            
             payload = {
                 "source": "fireflies",
+                "doc_type": "meeting",  # Document type for filtering
                 "transcript_id": transcript_id,
                 "title": transcript.get("title"),
                 "date": transcript.get("date"),  # Fireflies uses epoch ms
                 "duration": transcript.get("duration"),
                 "organizer_email": transcript.get("organizer_email"),
-                "speaker": metadata.get("speaker"),
+                "speakers": speakers_list,  # List of speakers for filtering
                 "section_id": metadata.get("section_id"),
                 "token_count": metadata.get("token_count"),
                 "chunk_index": i,

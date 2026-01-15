@@ -44,14 +44,14 @@ def mock_pipeline():
     """Mock IngestionPipeline"""
     pipeline = MagicMock()
     
-    # Mock chunked output (matches actual chunker structure)
+    # Mock chunked output (matches actual chunker structure with speakers list)
     pipeline.process_fireflies_meeting.return_value = [
         {
             "text": "Hello everyone, let's begin. Sounds good to me.",
             "metadata": {
                 "chunk_index": 0,
                 "token_count": 12,
-                "speaker": "Alice",
+                "speakers": ["Alice", "Bob"],
                 "section_id": 0,
             }
         },
@@ -60,7 +60,7 @@ def mock_pipeline():
             "metadata": {
                 "chunk_index": 1,
                 "token_count": 8,
-                "speaker": "Alice",
+                "speakers": ["Alice"],
                 "section_id": 1,
             }
         },
@@ -74,8 +74,12 @@ def mock_embedder():
     """Mock OllamaEmbeddingClient"""
     embedder = AsyncMock()
     
-    # Mock embeddings (384-dim vectors)
+    # Mock embeddings (384-dim vectors) - mock both batch methods
     embedder.embed_batch.return_value = [
+        [0.1] * 384,
+        [0.2] * 384,
+    ]
+    embedder.embed_documents.return_value = [
         [0.1] * 384,
         [0.2] * 384,
     ]
@@ -118,10 +122,10 @@ async def test_ingest_transcript_basic(ingestion_service, mock_loader, mock_pipe
     # Verify pipeline processed the transcript
     mock_pipeline.process_fireflies_meeting.assert_called_once()
     
-    # Verify embeddings were generated
-    texts = mock_embedder.embed_batch.call_args[0][0]
+    # Verify embeddings were generated with embed_documents (proper prefix)
+    texts = mock_embedder.embed_documents.call_args[0][0]
     assert len(texts) == 2
-    mock_embedder.embed_batch.assert_awaited_once()
+    mock_embedder.embed_documents.assert_awaited_once()
     
     # Verify collection was ensured
     mock_store.ensure_collection.assert_called_once()
@@ -182,12 +186,14 @@ async def test_ingest_transcript_payload_structure(ingestion_service, mock_store
     # Check first point's payload
     payload = points[0].payload
     assert payload["source"] == "fireflies"
+    assert payload["doc_type"] == "meeting"  # New field
     assert payload["transcript_id"] == "transcript123"
     assert payload["title"] == "Project Planning Meeting"
     assert payload["date"] == 1700000000000
     assert payload["duration"] == 3600
     assert payload["organizer_email"] == "alice@example.com"
-    assert "speaker" in payload
+    assert "speakers" in payload  # Changed from "speaker" to "speakers" list
+    assert isinstance(payload["speakers"], list)
     assert "section_id" in payload
     assert "token_count" in payload
     assert "chunk_index" in payload

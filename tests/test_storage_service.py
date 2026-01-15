@@ -40,11 +40,19 @@ class TestStorageServiceInit:
     """Tests for StorageService initialization."""
     
     def test_init_creates_client_lazily(self):
-        """Test that initialization doesn't create S3 client immediately."""
-        with patch('app.services.storage_service.boto3') as mock_boto3:
+        """Test that initialization creates S3 client with configured bucket."""
+        with patch('app.services.storage_service.boto3') as mock_boto3, \
+             patch('app.services.storage_service.settings') as mock_settings:
             mock_boto3.client.return_value = MagicMock()
+            mock_settings.S3_BUCKET_NAME = "dani-documents"
+            mock_settings.S3_DOCUMENTS_PREFIX = "documents/"
+            mock_settings.S3_PRESIGNED_URL_EXPIRY = 3600
+            mock_settings.AWS_REGION = "us-east-1"
+            mock_settings.AWS_ACCESS_KEY_ID = None
+            mock_settings.AWS_SECRET_ACCESS_KEY = None
+            mock_settings.S3_ENDPOINT_URL = None
             service = StorageService()
-            # Client is created lazily - check internal state
+            # Check internal state matches configured bucket
             assert service.bucket_name == "dani-documents"
     
     def test_client_property_creates_client_lazily(self):

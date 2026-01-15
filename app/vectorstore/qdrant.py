@@ -63,9 +63,13 @@ class QdrantStore:
         """Create indexes on commonly queried payload fields for better performance."""
         indexes = [
             ("meeting_date", qm.PayloadSchemaType.INTEGER),
+            ("date", qm.PayloadSchemaType.INTEGER),
             ("source_file", qm.PayloadSchemaType.KEYWORD),
             ("speakers", qm.PayloadSchemaType.KEYWORD),
             ("transcript_id", qm.PayloadSchemaType.KEYWORD),
+            ("doc_type", qm.PayloadSchemaType.KEYWORD),  # For document type filtering
+            ("document_id", qm.PayloadSchemaType.KEYWORD),  # For document collection
+            ("organizer_email", qm.PayloadSchemaType.KEYWORD),
         ]
         
         for field_name, schema_type in indexes:

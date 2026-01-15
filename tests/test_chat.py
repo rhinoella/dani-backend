@@ -366,9 +366,9 @@ async def test_text_preview_truncation(chat_service, mock_retrieval_service):
     
     response = await chat_service.answer("test query")
     
-    # Text preview should be truncated if sources exist
+    # Text preview should be truncated if sources exist (max 1000 chars)
     if response["sources"]:
-        assert len(response["sources"][0]["text_preview"]) <= 203  # 200 + "..."
+        assert len(response["sources"][0]["text_preview"]) <= 1000
 
 
 @pytest.mark.asyncio

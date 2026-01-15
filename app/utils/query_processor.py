@@ -231,15 +231,16 @@ class ConfidenceScorer:
     """
     Calculates confidence scores for RAG responses.
     
-    Thresholds calibrated for raw cosine similarity on conversational content,
-    which typically ranges from 0.05-0.30 for good matches.
+    Thresholds calibrated for nomic-embed-text with proper asymmetric prefixes
+    (search_query/search_document), which produces scores in the 0.3-0.8 range
+    for relevant content.
     """
     
     def __init__(
         self,
         min_chunks_for_high_confidence: int = 3,
-        min_avg_similarity: float = 0.08,   # Lowered from 0.75 - raw cosine is low
-        min_top_similarity: float = 0.12,   # Lowered from 0.80
+        min_avg_similarity: float = 0.40,   # Proper threshold with fixed embeddings
+        min_top_similarity: float = 0.50,   # Proper threshold with fixed embeddings
     ):
         self.min_chunks = min_chunks_for_high_confidence
         self.min_avg_similarity = min_avg_similarity

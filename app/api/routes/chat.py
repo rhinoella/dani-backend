@@ -92,6 +92,10 @@ async def chat(
     
     Set stream=true for faster perceived response.
     """
+    # Inject conversation cache into chat service for auto-loading
+    if conv_cache:
+        service.set_conversation_cache(conv_cache)
+    
     logger.info(f"[CHAT] === New Chat Request ===")
     logger.info(f"[CHAT] Query: {req.query[:100]}...")
     logger.info(f"[CHAT] Stream: {req.stream}, User: {current_user.id if current_user else 'anonymous'}")
@@ -235,6 +239,8 @@ async def chat(
                     req.query, 
                     output_format=req.output_format,
                     conversation_history=conversation_history,
+                    conversation_id=conversation_id if current_user else None,
+                    session=db if current_user else None,
                     doc_type=req.doc_type,
                     document_ids=effective_document_ids if effective_document_ids else None,
                 ):
@@ -366,6 +372,8 @@ async def chat(
                 verbose=req.verbose,
                 output_format=req.output_format,
                 conversation_history=history_context,
+                conversation_id=conversation_id if current_user else None,
+                session=db if current_user else None,
                 doc_type=req.doc_type,
                 document_ids=effective_document_ids if effective_document_ids else None,
             )

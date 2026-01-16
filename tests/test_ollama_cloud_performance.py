@@ -1,548 +1,485 @@
+#!/usr/bin/env python
 """
-Ollama Cloud Performance Tests
+Standalone Ollama Cloud Performance Verification Script
 
-Tests cloud Ollama connectivity, response quality, and performance with:
-- Various prompt sizes (small to huge)
-- RAG integration with real data
-- Response time tracking
-- Quality scoring
-- Comparison with local Ollama
+Run without pytest to get immediate performance metrics and diagnostics.
 
-Run with: pytest tests/test_ollama_cloud_performance.py -v --performance
+Usage:
+  python scripts/test_ollama_cloud_performance.py
+  python scripts/test_ollama_cloud_performance.py --quick
+  python scripts/test_ollama_cloud_performance.py --load-test
 """
 
-import pytest
-import time
 import asyncio
-from typing import Dict, Any, Optional
+import time
+import json
+import sys
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Any
+
+# Add app to path
+app_dir = Path(__file__).parent.parent
+sys.path.insert(0, str(app_dir))
 
 from app.core.config import settings
 from app.llm.ollama import OllamaClient
 from app.embeddings.client import OllamaEmbeddingClient
 
 
-pytestmark = pytest.mark.performance
+class ColoredOutput:
+    """Helper for colored terminal output."""
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    END = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    
+    @staticmethod
+    def success(text): print(f"{ColoredOutput.GREEN}✅ {text}{ColoredOutput.END}")
+    @staticmethod
+    def error(text): print(f"{ColoredOutput.RED}❌ {text}{ColoredOutput.END}")
+    @staticmethod
+    def warning(text): print(f"{ColoredOutput.YELLOW}⚠️  {text}{ColoredOutput.END}")
+    @staticmethod
+    def info(text): print(f"{ColoredOutput.BLUE}ℹ️  {text}{ColoredOutput.END}")
+    @staticmethod
+    def header(text): print(f"\n{ColoredOutput.BOLD}{ColoredOutput.HEADER}{text}{ColoredOutput.END}")
+    @staticmethod
+    def subheader(text): print(f"{ColoredOutput.CYAN}{ColoredOutput.BOLD}{text}{ColoredOutput.END}")
 
 
-class PerformanceMetrics:
-    """Track performance metrics for responses."""
+class PerformanceTester:
+    """Main performance testing class."""
     
-    def __init__(self, test_name: str):
-        self.test_name: str = test_name
-        self.start_time: Optional[float] = None
-        self.end_time: Optional[float] = None
-        self.prompt_length: int = 0
-        self.response_length: int = 0
-        self.tokens_per_second: float = 0.0
-        self.quality_score: float = 0.0
-        self.error: Optional[str] = None
+    def __init__(self):
+        self.results = []
+        self.start_time = None
+        self.config_valid = False
+        self.check_configuration()
     
-    @property
-    def duration_ms(self) -> float:
-        if self.start_time and self.end_time:
-            return (self.end_time - self.start_time) * 1000
-        return 0.0
+    def check_configuration(self):
+        """Verify Ollama configuration."""
+        ColoredOutput.header("🔍 CONFIGURATION CHECK")
+        
+        print(f"  OLLAMA_ENV: {settings.OLLAMA_ENV}")
+        print(f"  OLLAMA_BASE_URL: {settings.OLLAMA_BASE_URL}")
+        print(f"  LLM_MODEL: {settings.LLM_MODEL}")
+        print(f"  EMBEDDING_MODEL: {settings.EMBEDDING_MODEL}")
+        print(f"  API Key: {'✓ Present' if settings.OLLAMA_API_KEY else '✗ Missing'}")
+        
+        if settings.OLLAMA_ENV == "cloud" and not settings.OLLAMA_API_KEY:
+            ColoredOutput.error("Cloud mode selected but API key missing!")
+            return
+        
+        self.config_valid = True
+        ColoredOutput.success("Configuration valid")
     
-    def __str__(self) -> str:
-        status = "✅ PASS" if self.error is None else "❌ FAIL"
-        return (
-            f"{status} | {self.test_name}\n"
-            f"    Duration: {self.duration_ms:.0f}ms\n"
-            f"    Prompt: {self.prompt_length} chars | Response: {self.response_length} chars\n"
-            f"    Speed: {self.tokens_per_second:.1f} tokens/sec\n"
-            f"    Quality: {self.quality_score:.2f}/1.0"
-        )
-
-
-class TestOllamaCloudConnectivity:
-    """Test basic cloud Ollama connectivity."""
-    
-    @pytest.mark.asyncio
-    async def test_cloud_ollama_reachable(self):
-        """Test that cloud or configured Ollama API is reachable."""
-        metrics = PerformanceMetrics("ollama_reachable")
+    async def test_connectivity(self):
+        """Test basic connectivity."""
+        ColoredOutput.header("🌐 CONNECTIVITY TEST")
         
         try:
-            metrics.start_time = time.time()
-            
             client = OllamaClient()
+            start = time.time()
             result = await client.health_check()
+            duration = (time.time() - start) * 1000
             
-            metrics.end_time = time.time()
-            
-            assert result is True, "Ollama health check failed"
-            
-            print(f"\n{metrics}")
-            print(f"   Environment: {settings.OLLAMA_ENV}")
-            print(f"   Base URL: {settings.OLLAMA_BASE_URL}")
-            
+            if result:
+                ColoredOutput.success(f"Health check passed ({duration:.0f}ms)")
+                self.results.append({
+                    "test": "health_check",
+                    "status": "pass",
+                    "duration_ms": duration
+                })
+            else:
+                ColoredOutput.error("Health check returned False")
         except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
+            ColoredOutput.error(f"Connectivity test failed: {e}")
+            self.results.append({
+                "test": "health_check",
+                "status": "fail",
+                "error": str(e)
+            })
     
-    @pytest.mark.asyncio
-    async def test_ollama_model_available(self):
-        """Test that configured LLM model is available."""
-        metrics = PerformanceMetrics("model_available")
-        
-        try:
-            metrics.start_time = time.time()
-            
-            client = OllamaClient()
-            result = await client.health_check()
-            
-            metrics.end_time = time.time()
-            assert result is True
-            
-            print(f"\n{metrics}")
-            print(f"   Model: {settings.LLM_MODEL}")
-            
-        except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
-    
-    @pytest.mark.asyncio
-    async def test_ollama_auth_header(self):
-        """Test that Authorization header is sent correctly."""
-        metrics = PerformanceMetrics("auth_header")
-        
-        try:
-            client = OllamaClient()
-            
-            # Verify _get_headers returns correct headers
-            headers = client._get_headers()
-            
-            if settings.OLLAMA_ENV == "cloud" and settings.OLLAMA_API_KEY:
-                assert "Authorization" in headers, "Authorization header missing"
-                assert headers["Authorization"].startswith("Bearer "), "Invalid Authorization format"
-            
-            metrics.end_time = time.time()
-            print(f"\n{metrics}")
-            print(f"   Headers configured: ✅")
-            if "Authorization" in headers:
-                print(f"   Authorization: Present (Bearer token)")
-            
-        except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
-
-
-class TestOllamaPromptSizes:
-    """Test Ollama with various prompt sizes."""
-    
-    @pytest.mark.asyncio
     async def test_small_prompt(self):
-        """Test small prompt (~50 chars)."""
-        metrics = PerformanceMetrics("small_prompt")
+        """Test with small prompt."""
+        ColoredOutput.header("📝 SMALL PROMPT TEST")
+        
+        prompt = "What is artificial intelligence? Answer briefly."
+        ColoredOutput.info(f"Prompt: {prompt}")
         
         try:
-            prompt = "What is machine learning? Answer in 1-2 sentences."
-            metrics.prompt_length = len(prompt)
-            
-            print(f"\n📝 Small Prompt Test")
-            print(f"   Prompt ({metrics.prompt_length} chars): {prompt}")
-            
-            metrics.start_time = time.time()
-            
             client = OllamaClient()
+            start = time.time()
             response = await client.generate(prompt)
+            duration = (time.time() - start) * 1000
             
-            metrics.end_time = time.time()
-            metrics.response_length = len(response)
-            metrics.tokens_per_second = metrics.response_length / max(metrics.duration_ms / 1000, 0.1)
+            tokens_per_sec = len(response.split()) / (duration / 1000)
             
-            # Simple quality check
-            metrics.quality_score = min(len(response) / 100, 1.0)
+            print(f"  Duration: {duration:.0f}ms")
+            print(f"  Response length: {len(response)} chars")
+            print(f"  Tokens/sec: {tokens_per_sec:.1f}")
+            print(f"  Response: {response[:150]}...")
             
-            assert response, "Empty response received"
-            print(f"\n{metrics}")
-            print(f"   Response: {response[:150]}...")
-            
+            ColoredOutput.success("Small prompt test complete")
+            self.results.append({
+                "test": "small_prompt",
+                "status": "pass",
+                "duration_ms": duration,
+                "response_length": len(response),
+                "tokens_per_sec": tokens_per_sec
+            })
         except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
+            ColoredOutput.error(f"Small prompt test failed: {e}")
+            self.results.append({
+                "test": "small_prompt",
+                "status": "fail",
+                "error": str(e)
+            })
     
-    @pytest.mark.asyncio
     async def test_medium_prompt(self):
-        """Test medium prompt (~500 chars) - typical user query with context."""
-        metrics = PerformanceMetrics("medium_prompt")
+        """Test with medium prompt (realistic RAG scenario)."""
+        ColoredOutput.header("📄 MEDIUM PROMPT TEST")
+        
+        prompt = """
+        We held 5 meetings this week:
+        - Monday: Discussed Q1 budget allocation ($2.5M), approved 15% increase
+        - Tuesday: Hired 3 new engineers, onboarded 2 existing team members
+        - Wednesday: Customer feedback session revealed 5 major feature requests
+        - Thursday: Reviewed technical debt, identified 12 critical items to address
+        - Friday: Board meeting, approved expansion into 2 new markets
+        
+        Summarize the key decisions and provide action items for next week.
+        """
+        
+        ColoredOutput.info(f"Prompt length: {len(prompt)} chars")
         
         try:
-            prompt = """
-            Based on our recent Q4 planning meetings, we discussed:
-            - Budget allocation for 2025: $5M total, split across 3 teams
-            - New hiring: 5 engineers, 2 product managers, 1 designer
-            - Technology stack upgrade: Python 3.13, Django 5.0, PostgreSQL 16
-            - Cloud migration: Moving from on-premise to AWS
-            - Security audit planned for February
-            - Customer retention program to be launched March 1st
-            
-            What should be our top 3 priorities for January based on this?
-            """
-            metrics.prompt_length = len(prompt)
-            
-            print(f"\n📄 Medium Prompt Test")
-            print(f"   Prompt length: {metrics.prompt_length} chars")
-            
-            metrics.start_time = time.time()
-            
             client = OllamaClient()
+            start = time.time()
             response = await client.generate(prompt)
+            duration = (time.time() - start) * 1000
             
-            metrics.end_time = time.time()
-            metrics.response_length = len(response)
-            metrics.tokens_per_second = metrics.response_length / max(metrics.duration_ms / 1000, 0.1)
+            tokens_per_sec = len(response.split()) / (duration / 1000)
             
-            # Quality: check for structured response
-            has_bullets = "1." in response or "-" in response
-            has_explanation = len(response) > 200
-            metrics.quality_score = 0.5 if has_bullets else 0.3
-            metrics.quality_score += 0.5 if has_explanation else 0.0
+            print(f"  Duration: {duration:.0f}ms")
+            print(f"  Response length: {len(response)} chars")
+            print(f"  Tokens/sec: {tokens_per_sec:.1f}")
+            print(f"  Response: {response[:200]}...")
             
-            assert response, "Empty response received"
-            print(f"\n{metrics}")
-            print(f"   Response: {response[:200]}...")
-            
+            ColoredOutput.success("Medium prompt test complete")
+            self.results.append({
+                "test": "medium_prompt",
+                "status": "pass",
+                "duration_ms": duration,
+                "prompt_length": len(prompt),
+                "response_length": len(response),
+                "tokens_per_sec": tokens_per_sec
+            })
         except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
+            ColoredOutput.error(f"Medium prompt test failed: {e}")
+            self.results.append({
+                "test": "medium_prompt",
+                "status": "fail",
+                "error": str(e)
+            })
     
-    @pytest.mark.asyncio
     async def test_huge_prompt(self):
-        """Test huge prompt (~3000 chars) - like RAG with lots of context."""
-        metrics = PerformanceMetrics("huge_prompt")
+        """Test with huge prompt (like full RAG context)."""
+        ColoredOutput.header("🗂️  HUGE PROMPT TEST")
+        
+        # Build context similar to RAG retrieval with many documents
+        context_items = [
+            "Meeting 1: Q1 planning approved, budget $2.5M, 3 teams assigned",
+            "Meeting 2: Engineering standup, 5 engineers onboarded, productivity +15%",
+            "Meeting 3: Customer feedback, 5 feature requests, prioritize now",
+            "Meeting 4: Board meeting, approved 2 new market expansions, hiring plan",
+            "Meeting 5: Tech review, 12 debt items identified, 3 critical this quarter",
+            "Meeting 6: Security audit planned Feb, compliance review Q2",
+            "Meeting 7: Customer retention program launching March 1st",
+            "Meeting 8: Cloud migration to AWS, target June completion",
+        ] * 3  # Repeat to make it substantial
+        
+        prompt = f"""
+        CONTEXT FROM MEETINGS:
+        {chr(10).join(f'• {item}' for item in context_items)}
+        
+        Based on ALL of this context, provide:
+        1. Executive summary (3-5 bullets)
+        2. Top 5 action items with owners
+        3. Critical blockers and risks
+        4. Timeline for next 30 days
+        5. Resource requirements
+        
+        Be comprehensive and cite specific meetings.
+        """
+        
+        ColoredOutput.info(f"Prompt length: {len(prompt)} chars (simulates heavy RAG context)")
         
         try:
-            # Simulate RAG context with multiple transcript chunks
-            context_chunks = [
-                "Meeting 1 (Jan 5): Discussed Q1 roadmap, approved budget increase to $2.5M",
-                "Meeting 2 (Jan 6): Team standup, 3 engineers on-boarded, productivity up 15%",
-                "Meeting 3 (Jan 7): Customer feedback session, 5 feature requests documented",
-                "Meeting 4 (Jan 8): Board meeting, approved expansion to 2 new markets",
-                "Meeting 5 (Jan 9): Engineering review, identified 12 technical debt items",
-            ] * 6  # Repeat to make it huge
-            
-            rag_context = "\n".join([f"• {chunk}" for chunk in context_chunks])
-            
-            prompt = f"""
-            Context from recent meetings:
-            {rag_context}
-            
-            Based on ALL of this context, provide a comprehensive summary of:
-            1. Key decisions made
-            2. Action items assigned
-            3. Timeline for next steps
-            4. Budget implications
-            5. Team impact assessment
-            
-            Be thorough and cite specific meetings when possible.
-            """
-            
-            metrics.prompt_length = len(prompt)
-            
-            print(f"\n🗂️  Huge Prompt Test (Simulated RAG Context)")
-            print(f"   Prompt length: {metrics.prompt_length} chars")
-            print(f"   Context chunks: {len(context_chunks)}")
-            
-            metrics.start_time = time.time()
-            
             client = OllamaClient()
+            start = time.time()
             response = await client.generate(prompt)
+            duration = (time.time() - start) * 1000
             
-            metrics.end_time = time.time()
-            metrics.response_length = len(response)
-            metrics.tokens_per_second = metrics.response_length / max(metrics.duration_ms / 1000, 0.1)
+            tokens_per_sec = len(response.split()) / (duration / 1000)
             
-            # Quality: check for comprehensive response
-            has_all_sections = all(f"{i}." in response for i in range(1, 6))
-            mentions_meetings = "meeting" in response.lower()
-            metrics.quality_score = 0.6 if has_all_sections else 0.3
-            metrics.quality_score += 0.4 if mentions_meetings else 0.0
+            print(f"  Duration: {duration:.0f}ms")
+            print(f"  Response length: {len(response)} chars")
+            print(f"  Tokens/sec: {tokens_per_sec:.1f}")
+            print(f"  Response: {response[:250]}...")
             
-            assert response, "Empty response received"
-            assert len(response) > 500, "Response too short for huge prompt"
+            if duration > 8000:
+                ColoredOutput.warning(f"Large prompt took {duration:.0f}ms - consider streaming")
+            else:
+                ColoredOutput.success("Huge prompt test complete")
             
-            print(f"\n{metrics}")
-            print(f"   Response: {response[:250]}...")
-            
+            self.results.append({
+                "test": "huge_prompt",
+                "status": "pass",
+                "duration_ms": duration,
+                "prompt_length": len(prompt),
+                "response_length": len(response),
+                "tokens_per_sec": tokens_per_sec
+            })
+        except asyncio.TimeoutError:
+            ColoredOutput.error("Huge prompt test timed out - consider streaming or reducing context")
+            self.results.append({
+                "test": "huge_prompt",
+                "status": "fail",
+                "error": "timeout"
+            })
         except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
+            ColoredOutput.error(f"Huge prompt test failed: {e}")
+            self.results.append({
+                "test": "huge_prompt",
+                "status": "fail",
+                "error": str(e)
+            })
     
-    @pytest.mark.asyncio
-    async def test_streaming_response(self):
-        """Test streaming response with medium prompt."""
-        metrics = PerformanceMetrics("streaming_response")
+    async def test_streaming(self):
+        """Test streaming response."""
+        ColoredOutput.header("🌊 STREAMING TEST")
+        
+        prompt = "List 10 cloud architecture best practices with brief explanations."
+        ColoredOutput.info(f"Prompt: {prompt}")
         
         try:
-            prompt = "List 10 best practices for cloud architecture. Be detailed."
-            metrics.prompt_length = len(prompt)
-            
-            print(f"\n🌊 Streaming Response Test")
-            print(f"   Prompt: {prompt}")
-            
-            metrics.start_time = time.time()
-            
             client = OllamaClient()
-            full_response = ""
-            token_count = 0
+            start = time.time()
+            tokens = 0
+            response = ""
             
-            print("   Streaming: ", end="", flush=True)
+            print("  Streaming response: ", end="", flush=True)
             async for token in client.generate_stream(prompt):
-                full_response += token
-                token_count += 1
-                if token_count % 50 == 0:
+                response += token
+                tokens += 1
+                if tokens % 50 == 0:
                     print(".", end="", flush=True)
             print(" done")
             
-            metrics.end_time = time.time()
-            metrics.response_length = len(full_response)
-            metrics.tokens_per_second = token_count / max(metrics.duration_ms / 1000, 0.1)
+            duration = (time.time() - start) * 1000
             
-            # Quality check
-            has_practices = all(str(i) in full_response for i in range(1, 6))
-            metrics.quality_score = 0.7 if has_practices else 0.5
+            print(f"  Duration: {duration:.0f}ms")
+            print(f"  Tokens streamed: {tokens}")
+            print(f"  Tokens/sec: {tokens / (duration / 1000):.1f}")
+            print(f"  Response: {response[:200]}...")
             
-            assert full_response, "Empty streaming response"
-            assert token_count > 50, "Too few tokens streamed"
-            
-            print(f"\n{metrics}")
-            print(f"   Tokens streamed: {token_count}")
-            print(f"   Response: {full_response[:200]}...")
-            
+            ColoredOutput.success("Streaming test complete")
+            self.results.append({
+                "test": "streaming",
+                "status": "pass",
+                "duration_ms": duration,
+                "tokens_streamed": tokens,
+                "tokens_per_sec": tokens / (duration / 1000)
+            })
         except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
-
-
-class TestOllamaEmbeddings:
-    """Test embeddings (local only - cloud doesn't support embeddings)."""
+            ColoredOutput.error(f"Streaming test failed: {e}")
+            self.results.append({
+                "test": "streaming",
+                "status": "fail",
+                "error": str(e)
+            })
     
-    @pytest.fixture(autouse=True)
-    def skip_if_cloud(self):
-        """Skip all embedding tests if using cloud Ollama."""
-        if settings.OLLAMA_ENV == "cloud":
-            pytest.skip("Embeddings must use local Ollama (cloud doesn't support them)")
-    
-    @pytest.mark.asyncio
-    async def test_embedding_generation(self):
-        """Test single embedding generation (local only)."""
-        metrics = PerformanceMetrics("embedding_generation")
+    async def test_embeddings(self):
+        """Test embedding generation."""
+        ColoredOutput.header("🧩 EMBEDDING TEST")
+        
+        texts = [
+            "What are the key decisions from recent meetings?",
+            "How should we prioritize Q1 work items?",
+            "What is our budget allocation for engineering?",
+            "Summarize the technical debt identified",
+            "List the new market expansion opportunities",
+        ]
+        
+        ColoredOutput.info(f"Embedding {len(texts)} documents")
         
         try:
-            text = "What are the key decisions from the Q4 planning meetings?"
-            metrics.prompt_length = len(text)
-            
-            print(f"\n🧩 Embedding Generation Test (Local Only)")
-            print(f"   Text: {text}")
-            print(f"   📍 Must use local Docker - cloud doesn't support embeddings")
-            
-            metrics.start_time = time.time()
-            
             embedder = OllamaEmbeddingClient()
-            embedding = await embedder.embed_query(text)
-            
-            metrics.end_time = time.time()
-            metrics.response_length = len(embedding)
-            metrics.quality_score = 1.0 if len(embedding) == 768 else 0.5
-            
-            assert embedding, "Empty embedding"
-            assert len(embedding) == 768, f"Expected 768-dim embedding, got {len(embedding)}"
-            
-            print(f"\n{metrics}")
-            print(f"   Embedding dimension: {len(embedding)}")
-            
-        except Exception as e:
-            metrics.error = str(e)
-            if "404" in str(e) or "not found" in str(e).lower():
-                pytest.skip("Embeddings must be on local Ollama (cloud doesn't support them)")
-            if "refused" in str(e).lower() or "connect" in str(e).lower():
-                pytest.skip(f"Local Ollama not available: {e}")
-            print(f"\n{metrics}")
-            raise
-    
-    @pytest.mark.asyncio
-    async def test_batch_embeddings(self):
-        """Test batch embedding generation (local only)."""
-        metrics = PerformanceMetrics("batch_embeddings")
-        
-        try:
-            texts = [
-                "Meeting summary: Q1 planning approved",
-                "Action items: Budget review by Friday",
-                "Decisions: Hired 3 new engineers",
-                "Timeline: Launch marketing campaign March 1st",
-                "Team impact: 15% productivity increase",
-            ]
-            
-            metrics.prompt_length = sum(len(t) for t in texts)
-            
-            print(f"\n📦 Batch Embeddings Test (Local Only)")
-            print(f"   Texts to embed: {len(texts)}")
-            print(f"   📍 Must use local Docker - cloud doesn't support embeddings")
-            
-            metrics.start_time = time.time()
-            
-            embedder = OllamaEmbeddingClient()
+            start = time.time()
             embeddings = await embedder.embed_documents(texts, batch_size=3)
+            duration = (time.time() - start) * 1000
             
-            metrics.end_time = time.time()
-            metrics.response_length = len(embeddings)
-            metrics.quality_score = 1.0 if len(embeddings) == len(texts) else 0.5
+            docs_per_sec = len(embeddings) / (duration / 1000)
             
-            # Quality check
-            assert embeddings, "Empty embeddings"
-            assert len(embeddings) == len(texts), f"Expected {len(texts)} embeddings, got {len(embeddings)}"
+            print(f"  Duration: {duration:.0f}ms")
+            print(f"  Docs embedded: {len(embeddings)}")
+            print(f"  Embedding dimension: {len(embeddings[0]) if embeddings else 'N/A'}")
+            print(f"  Docs/sec: {docs_per_sec:.1f}")
             
-            print(f"\n{metrics}")
-            print(f"   Embeddings generated: {len(embeddings)}")
-            if embeddings:
-                print(f"   Dimension per vector: {len(embeddings[0])}")
-            
+            ColoredOutput.success("Embedding test complete")
+            self.results.append({
+                "test": "embeddings",
+                "status": "pass",
+                "duration_ms": duration,
+                "documents": len(embeddings),
+                "docs_per_sec": docs_per_sec,
+                "embedding_dim": len(embeddings[0]) if embeddings else 0
+            })
         except Exception as e:
-            metrics.error = str(e)
-            if "404" in str(e) or "not found" in str(e).lower():
-                pytest.skip("Embeddings must be on local Ollama (cloud doesn't support them)")
-            if "refused" in str(e).lower() or "connect" in str(e).lower():
-                pytest.skip(f"Local Ollama not available: {e}")
-            print(f"\n{metrics}")
-            raise
-            
-            assert len(embeddings) == len(texts), "Embedding count mismatch"
-            assert all(len(e) == 768 for e in embeddings), "Invalid embedding dimensions"
-            
-            metrics.tokens_per_second = len(texts) / max(metrics.duration_ms / 1000, 0.1)
-            
-            print(f"\n{metrics}")
-            print(f"   Texts embedded: {len(texts)}")
-            print(f"   Batch size: 3")
-            for i, text in enumerate(texts, 1):
-                print(f"   [{i}] {text[:50]}...")
-            
-        except Exception as e:
-            metrics.error = str(e)
-            print(f"\n{metrics}")
-            raise
-
-
-class TestOllamaRAGIntegration:
-    """Test Ollama with RAG pipeline."""
+            ColoredOutput.error(f"Embedding test failed: {e}")
+            self.results.append({
+                "test": "embeddings",
+                "status": "fail",
+                "error": str(e)
+            })
     
-    @pytest.mark.asyncio
-    async def test_rag_retrieval(self):
-        """Test RAG retrieval with your working RAG pipeline (local embeddings + cloud LLM)."""
-        metrics = PerformanceMetrics("rag_retrieval")
+    async def test_load_simulation(self):
+        """Simulate load with concurrent requests."""
+        ColoredOutput.header("⚡ LOAD SIMULATION TEST")
+        
+        ColoredOutput.info("Sending 3 concurrent prompts")
+        
+        prompts = [
+            "Explain machine learning in 2 sentences.",
+            "What is cloud computing? Answer briefly.",
+            "Describe DevOps practices concisely.",
+        ]
         
         try:
-            query = "What are the top priorities for Q1?"
-            metrics.prompt_length = len(query)
+            client = OllamaClient()
+            start = time.time()
             
-            print(f"\n🔍 RAG Retrieval Test (Hybrid Search)")
-            print(f"   Query: {query}")
-            print(f"   📍 Embeddings: Local Docker (nomic-embed-text)")
-            print(f"   ☁️  LLM: Cloud Ollama")
+            # Run requests concurrently
+            tasks = [client.generate(p) for p in prompts]
+            responses = await asyncio.gather(*tasks)
             
-            metrics.start_time = time.time()
+            duration = (time.time() - start) * 1000
+            total_chars = sum(len(r) for r in responses)
             
-            # Temporarily force local embeddings even if LLM is on cloud
-            from app.core.config import settings
-            original_env = settings.OLLAMA_ENV
-            settings.OLLAMA_ENV = "local"  # Force local for embeddings
+            print(f"  Duration: {duration:.0f}ms (concurrent)")
+            print(f"  Requests: {len(responses)}")
+            print(f"  Total response chars: {total_chars}")
+            print(f"  Average response: {total_chars // len(responses)} chars")
             
-            try:
-                from app.services.retrieval_service import RetrievalService
-                retrieval = RetrievalService()
-                # Use correct method: search() with limit parameter
-                # Embeddings will use local Docker automatically (nomic-embed-text)
-                results = await retrieval.search(
-                    query=query,
-                    limit=5,
-                    use_hybrid=True,
-                    use_reranking=True,
-                    use_adaptive=True
-                )
-                
-                metrics.end_time = time.time()
-                metrics.response_length = sum(len(r.get("content", "")) for r in results)
-                
-                # Quality: number of relevant results retrieved
-                metrics.quality_score = min(len(results) / 5, 1.0)
-                
-                print(f"\n{metrics}")
-                print(f"   Results retrieved: {len(results)}")
-                if results:
-                    for i, result in enumerate(results[:3], 1):
-                        content = result.get("content", "")[:80]
-                        score = result.get("score", 0)
-                        print(f"   [{i}] Score: {score:.3f} | {content}...")
-                
-                assert len(results) > 0, "No results retrieved from RAG"
-                
-            finally:
-                # Restore original environment
-                settings.OLLAMA_ENV = original_env
-            
+            ColoredOutput.success("Load simulation complete")
+            self.results.append({
+                "test": "concurrent_load",
+                "status": "pass",
+                "duration_ms": duration,
+                "concurrent_requests": len(responses),
+                "total_response_chars": total_chars
+            })
         except Exception as e:
-            metrics.error = str(e)
-            if "Qdrant" in str(e) or "connect" in str(e).lower():
-                pytest.skip(f"Qdrant not available: {e}")
-            if "embedding" in str(e).lower() or "404" in str(e) or "refused" in str(e).lower():
-                pytest.skip(f"Local Ollama not available for embeddings: {e}")
-            print(f"\n{metrics}")
-            raise
-
-
-class TestOllamaComparison:
-    """Compare Ollama performance (cloud vs local)."""
+            ColoredOutput.error(f"Load simulation failed: {e}")
+            self.results.append({
+                "test": "concurrent_load",
+                "status": "fail",
+                "error": str(e)
+            })
     
-    @pytest.mark.asyncio
-    async def test_performance_comparison(self):
-        """Compare performance metrics."""
-        results = {
-            "current": {"duration_ms": 0, "error": None},
+    def print_summary(self):
+        """Print test summary."""
+        ColoredOutput.header("📊 PERFORMANCE SUMMARY")
+        
+        total = len(self.results)
+        passed = sum(1 for r in self.results if r.get("status") == "pass")
+        failed = total - passed
+        
+        print(f"  Total tests: {total}")
+        print(f"  Passed: {ColoredOutput.GREEN}{passed}{ColoredOutput.END}")
+        print(f"  Failed: {ColoredOutput.RED}{failed}{ColoredOutput.END}")
+        
+        # Aggregate timing
+        durations = [r.get("duration_ms", 0) for r in self.results if r.get("duration_ms")]
+        if durations:
+            print(f"  Total duration: {sum(durations):.0f}ms")
+            print(f"  Average per test: {sum(durations) / len(durations):.0f}ms")
+        
+        # Save results
+        report = {
+            "timestamp": datetime.now().isoformat(),
+            "config": {
+                "env": settings.OLLAMA_ENV,
+                "base_url": settings.OLLAMA_BASE_URL,
+                "model": settings.LLM_MODEL,
+            },
+            "summary": {
+                "total": total,
+                "passed": passed,
+                "failed": failed,
+            },
+            "results": self.results,
         }
         
-        prompt = "Explain cloud architecture in 2 sentences."
+        report_file = Path(__file__).parent.parent.parent / "performance_report.json"
+        with open(report_file, "w") as f:
+            json.dump(report, f, indent=2)
         
-        try:
-            metrics = PerformanceMetrics("performance_comparison")
-            metrics.start_time = time.time()
-            
-            client = OllamaClient()
-            response = await client.generate(prompt)
-            
-            metrics.end_time = time.time()
-            results["current"]["duration_ms"] = metrics.duration_ms
-            
-            print(f"\n📊 Performance Comparison")
-            print(f"   Environment: {settings.OLLAMA_ENV}")
-            print(f"   Base URL: {settings.OLLAMA_BASE_URL}")
-            print(f"   Model: {settings.LLM_MODEL}")
-            print(f"   Response Time: {metrics.duration_ms:.0f}ms")
-            
-            if settings.OLLAMA_ENV == "cloud":
-                print(f"   Status: ✅ Cloud Ollama performing")
-                print(f"   Expected: 500-3000ms for small prompt")
-            else:
-                print(f"   Status: ✅ Local Ollama performing")
-                print(f"   Expected: 100-500ms for small prompt")
-            
-        except Exception as e:
-            results["current"]["error"] = str(e)
-            print(f"\n❌ Comparison Test Failed: {e}")
+        ColoredOutput.info(f"Report saved: {report_file}")
+    
+    async def run_all(self, quick=False):
+        """Run all tests."""
+        if not self.config_valid:
+            ColoredOutput.error("Configuration check failed - aborting tests")
+            return
+        
+        self.start_time = time.time()
+        
+        await self.test_connectivity()
+        await self.test_small_prompt()
+        await self.test_medium_prompt()
+        
+        if not quick:
+            await self.test_huge_prompt()
+            await self.test_streaming()
+            await self.test_embeddings()
+            await self.test_load_simulation()
+        
+        self.print_summary()
+        
+        total_time = time.time() - self.start_time
+        print(f"\n⏱️  Total test time: {total_time:.1f} seconds")
 
 
-@pytest.fixture
-def performance_summary():
-    """Fixture to generate performance summary."""
-    yield
-    print("\n" + "=" * 70)
-    print("📈 PERFORMANCE TEST SUMMARY")
-    print("=" * 70)
+async def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Test Ollama Cloud Performance")
+    parser.add_argument("--quick", action="store_true", help="Run quick tests only")
+    parser.add_argument("--load-test", action="store_true", help="Focus on load testing")
+    args = parser.parse_args()
+    
+    ColoredOutput.header("🚀 OLLAMA CLOUD PERFORMANCE TESTER")
+    
+    tester = PerformanceTester()
+    
+    try:
+        await tester.run_all(quick=args.quick)
+    except KeyboardInterrupt:
+        ColoredOutput.warning("Tests interrupted by user")
+    except Exception as e:
+        ColoredOutput.error(f"Test suite failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

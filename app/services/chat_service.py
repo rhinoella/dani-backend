@@ -6,6 +6,7 @@ import json
 import time
 
 from qdrant_client.http import models as qm
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.metrics import metrics
@@ -18,6 +19,7 @@ from app.llm.prompt_builder import PromptBuilder
 from app.llm.output_validator import OutputValidator
 from app.persona.templates import validate_output_format
 from app.cache.semantic_cache import ResponseCache
+from app.cache.conversation_cache import ConversationCache
 from app.utils.query_processor import ConfidenceScorer
 from app.schemas.retrieval import MetadataFilter
 
@@ -31,6 +33,9 @@ class ChatService:
     - Confidence scoring
     - Source attribution
     - Structured output support
+    - Automatic conversation history loading
+    - Smart context window management
+    - Conversation summarization
     """
 
     def __init__(self, use_enhanced_retrieval: bool = False) -> None:
@@ -61,6 +66,189 @@ class ChatService:
             max_size=200,
             ttl_seconds=1800,  # 30 minutes
         )
+        
+        # Conversation cache for history
+        self._conversation_cache: Optional[ConversationCache] = None
+        
+        # Context window limits
+        self.max_history_messages = 10  # Keep last 10 messages
+        self.max_history_tokens = 2000  # Max tokens for history
+        self.summarize_threshold = 20  # Summarize after 20 messages
+    
+    def set_conversation_cache(self, cache: ConversationCache) -> None:
+        """Set conversation cache for history loading."""
+        self._conversation_cache = cache
+    
+    async def _load_conversation_history(
+        self,
+        conversation_id: str,
+        session: AsyncSession
+    ) -> List[Dict[str, str]]:
+        """
+        Load conversation history from database with caching.
+        
+        Args:
+            conversation_id: ID of conversation to load
+            session: Database session
+            
+        Returns:
+            List of {"role": "user"|"assistant", "content": str}
+        """
+        # Try cache first
+        if self._conversation_cache:
+            cached = await self._conversation_cache.get_messages(conversation_id)
+            if cached:
+                logger.info(f"Loaded {len(cached)} messages from cache for conversation {conversation_id}")
+                return cached
+        
+        # Load from database
+        from app.repositories.message_repository import MessageRepository
+        msg_repo = MessageRepository(session)
+        
+        # Get recent messages (limit to avoid huge history)
+        messages = await msg_repo.get_by_conversation(
+            conversation_id,
+            limit=self.max_history_messages * 2,  # Get more to allow for compression
+            ascending=False  # Most recent first
+        )
+        
+        # Convert to conversation history format (oldest first for context)
+        history = [
+            {"role": msg.role, "content": msg.content}
+            for msg in reversed(messages)
+        ]
+        
+        logger.info(f"Loaded {len(history)} messages from DB for conversation {conversation_id}")
+        
+        # Cache for future requests
+        if self._conversation_cache:
+            await self._conversation_cache.set_messages(conversation_id, history)
+        
+        return history
+    
+    def _compress_conversation_history(
+        self,
+        history: List[Dict[str, str]],
+        max_tokens: Optional[int] = None
+    ) -> List[Dict[str, str]]:
+        """
+        Compress conversation history to fit within token budget.
+        Uses sliding window approach: keeps most recent messages.
+        
+        Args:
+            history: Full conversation history
+            max_tokens: Maximum tokens to use (defaults to self.max_history_tokens)
+            
+        Returns:
+            Compressed history within token budget
+        """
+        if not history:
+            return []
+        
+        max_tokens = max_tokens or self.max_history_tokens
+        compressed = []
+        total_tokens = 0
+        
+        # Work backwards (most recent first)
+        for msg in reversed(history):
+            # Rough token estimate: 1 token ≈ 4 characters
+            msg_tokens = len(msg["content"]) // 4
+            
+            if total_tokens + msg_tokens > max_tokens:
+                break
+            
+            compressed.insert(0, msg)
+            total_tokens += msg_tokens
+        
+        if len(compressed) < len(history):
+            logger.info(f"Compressed history from {len(history)} to {len(compressed)} messages ({total_tokens} tokens)")
+        
+        return compressed
+    
+    async def _summarize_old_messages(
+        self,
+        messages: List[Dict[str, str]]
+    ) -> str:
+        """
+        Summarize older messages into a brief summary.
+        Used when conversation exceeds threshold.
+        
+        Args:
+            messages: Messages to summarize (typically messages 11-20)
+            
+        Returns:
+            Brief summary string
+        """
+        if not messages or len(messages) < 3:
+            return ""
+        
+        # Format messages for summarization
+        message_text = "\n".join([
+            f"{msg['role'].upper()}: {msg['content']}"
+            for msg in messages
+        ])
+        
+        summary_prompt = f"""Summarize this conversation excerpt concisely in 2-3 sentences:
+
+{message_text}
+
+Summary:"""
+        
+        try:
+            summary = await self.llm.generate(summary_prompt, stream=False)
+            logger.info(f"Summarized {len(messages)} messages into {len(summary)} chars")
+            return summary.strip()
+        except Exception as e:
+            logger.error(f"Failed to summarize messages: {e}")
+            return ""
+    
+    async def _prepare_conversation_context(
+        self,
+        conversation_id: Optional[str],
+        conversation_history: Optional[List[Dict[str, str]]],
+        session: Optional[AsyncSession]
+    ) -> List[Dict[str, str]]:
+        """
+        Prepare conversation context with auto-loading, caching, and compression.
+        
+        Args:
+            conversation_id: Optional conversation ID to auto-load history
+            conversation_history: Manually provided history (takes precedence)
+            session: Database session for loading history
+            
+        Returns:
+            Prepared conversation history within token budget
+        """
+        # If history provided manually, use it
+        if conversation_history:
+            return self._compress_conversation_history(conversation_history)
+        
+        # Auto-load from conversation_id if provided
+        if conversation_id and session:
+            history = await self._load_conversation_history(conversation_id, session)
+            
+            # If conversation is very long, summarize older messages
+            if len(history) > self.summarize_threshold:
+                logger.info(f"Conversation has {len(history)} messages, applying summarization")
+                
+                # Keep last 10 messages as-is
+                recent_messages = history[-self.max_history_messages:]
+                
+                # Summarize older messages (11-20)
+                old_messages = history[-(self.summarize_threshold):-self.max_history_messages]
+                summary = await self._summarize_old_messages(old_messages)
+                
+                # Create context with summary + recent messages
+                if summary:
+                    return [{"role": "system", "content": f"Previous conversation summary: {summary}"}] + recent_messages
+                else:
+                    return recent_messages
+            
+            # Otherwise just compress to fit token budget
+            return self._compress_conversation_history(history)
+        
+        # No history available
+        return []
 
     async def answer(
         self, 
@@ -69,6 +257,8 @@ class ChatService:
         output_format: Optional[str] = None,
         use_cache: bool = True,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_id: Optional[str] = None,
+        session: Optional[AsyncSession] = None,
         doc_type: Optional[str] = None,
         document_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
@@ -81,12 +271,22 @@ class ChatService:
             output_format: Optional output format template
             use_cache: Use response cache
             conversation_history: List of {"role": "user"|"assistant", "content": str}
+            conversation_id: ID of conversation to auto-load history from
+            session: Database session for loading conversation history
             doc_type: Filter by document type (meeting, email, document, note, all)
             document_ids: Optional list of document IDs to restrict search to
         """
         start_time = time.time()
         debug: Dict[str, Any] = {}
         timings: Dict[str, float] = {}
+        
+        # Prepare conversation context (auto-load, cache, compress)
+        conversation_history = await self._prepare_conversation_context(
+            conversation_id, conversation_history, session
+        )
+        
+        if conversation_history:
+            debug["conversation_messages_used"] = len(conversation_history)
         
         # Query length validation
         if len(query) > settings.MAX_QUERY_LENGTH:
@@ -520,6 +720,8 @@ class ChatService:
         query: str,
         output_format: Optional[str] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
+        conversation_id: Optional[str] = None,
+        session: Optional[AsyncSession] = None,
         doc_type: Optional[str] = None,
         document_ids: Optional[List[str]] = None,
     ) -> AsyncIterator[str]:
@@ -531,11 +733,18 @@ class ChatService:
             query: User's current question
             output_format: Optional output format template
             conversation_history: List of {"role": "user"|"assistant", "content": str} for context
+            conversation_id: ID of conversation to auto-load history from
+            session: Database session for loading conversation history
             doc_type: Filter by document type (meeting, email, document, note, all)
             document_ids: Optional list of document IDs to restrict search to
         """
         import time
         stream_start_time = time.time()
+        
+        # Prepare conversation context (auto-load, cache, compress)
+        conversation_history = await self._prepare_conversation_context(
+            conversation_id, conversation_history, session
+        )
         
         logger.info(f"[STREAM] === Starting streaming response ===")
         logger.info(f"[STREAM] Query: {query[:100]}...")

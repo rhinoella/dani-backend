@@ -17,7 +17,6 @@ import logging
 import mimetypes
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, BinaryIO
-from uuid import uuid5, NAMESPACE_DNS
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from qdrant_client.http import models as qm
@@ -33,6 +32,7 @@ from app.ingestion.chunker import TokenChunker
 from app.embeddings.client import OllamaEmbeddingClient
 from app.vectorstore.qdrant import QdrantStore
 from app.services.storage_service import StorageService, get_storage_service
+from app.utils.id_generator import stable_point_id
 from app.schemas.document import (
     DocumentResponse,
     DocumentUploadResponse,
@@ -74,12 +74,6 @@ MAX_FILE_SIZES = {
     DocumentType.DOCX: 25 * 1024 * 1024,   # 25MB
     DocumentType.TXT: 10 * 1024 * 1024,    # 10MB
 }
-
-
-def _stable_point_id(*parts: str) -> str:
-    """Generate a stable UUID5 from multiple string parts."""
-    composite = ":".join(parts)
-    return str(uuid5(NAMESPACE_DNS, composite))
 
 
 class DocumentService:
@@ -302,7 +296,7 @@ class DocumentService:
                 }
                 
                 # Generate stable point ID
-                point_id = _stable_point_id("document", document.id, str(i))
+                point_id = stable_point_id("document", document.id, str(i))
                 points.append(qm.PointStruct(id=point_id, vector=vector, payload=payload))
             
             # 6) Upsert to Qdrant

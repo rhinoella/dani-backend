@@ -14,24 +14,11 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from collections import OrderedDict
-import numpy as np
 from hashlib import md5
 
+from app.utils.similarity import cosine_similarity
+
 logger = logging.getLogger(__name__)
-
-
-def cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:
-    """Compute cosine similarity between two vectors."""
-    a = np.array(vec_a)
-    b = np.array(vec_b)
-    
-    norm_a = np.linalg.norm(a)
-    norm_b = np.linalg.norm(b)
-    
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    
-    return float(np.dot(a, b) / (norm_a * norm_b))
 
 
 @dataclass
@@ -245,12 +232,19 @@ class ResponseCache:
         # Stampede protection: locks per cache key
         self._locks: Dict[str, asyncio.Lock] = {}
         self._locks_lock = asyncio.Lock()  # Protects the locks dict
+        self._lock_access_count = 0  # Track accesses for periodic cleanup
     
     async def _get_lock(self, key: str) -> asyncio.Lock:
         """Get or create a lock for a cache key."""
         async with self._locks_lock:
             if key not in self._locks:
                 self._locks[key] = asyncio.Lock()
+            
+            # Periodic cleanup every 100 accesses
+            self._lock_access_count += 1
+            if self._lock_access_count % 100 == 0:
+                await self._cleanup_stale_locks()
+            
             return self._locks[key]
     
     async def _cleanup_lock(self, key: str) -> None:
@@ -259,6 +253,15 @@ class ResponseCache:
             lock = self._locks.get(key)
             if lock and not lock.locked():
                 del self._locks[key]
+    
+    async def _cleanup_stale_locks(self) -> None:
+        """Remove all unlocked locks to prevent memory leak."""
+        stale_keys = [key for key, lock in self._locks.items() if not lock.locked()]
+        for key in stale_keys:
+            del self._locks[key]
+        
+        if stale_keys:
+            logger.debug(f"Cleaned up {len(stale_keys)} stale locks")
     
     async def get_or_generate(
         self,

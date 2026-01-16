@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Dict, List, Optional
-from uuid import uuid5, NAMESPACE_DNS
 
 from qdrant_client.http import models as qm
 
@@ -12,14 +11,9 @@ from app.ingestion.pipeline import IngestionPipeline
 from app.ingestion.loaders.fireflies_loader import FirefliesLoader
 from app.vectorstore.qdrant import QdrantStore
 from app.schemas.ingest import FirefliesSyncResponse, IngestionStatus
+from app.utils.id_generator import stable_point_id
 
 logger = logging.getLogger(__name__)
-
-
-def _stable_point_id(*parts: str) -> str:
-    """Generate a stable UUID5 from multiple string parts."""
-    composite = ":".join(parts)
-    return str(uuid5(NAMESPACE_DNS, composite))
 
 
 class IngestionService:
@@ -110,7 +104,7 @@ class IngestionService:
                 "text": c.get("text"),
             }
 
-            pid = _stable_point_id("fireflies", transcript_id, str(metadata.get("section_id")), str(i))
+            pid = stable_point_id("fireflies", transcript_id, str(metadata.get("section_id")), str(i))
             points.append(qm.PointStruct(id=pid, vector=v, payload=payload))
 
         try:

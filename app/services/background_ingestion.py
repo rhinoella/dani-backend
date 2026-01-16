@@ -18,7 +18,6 @@ import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
-from uuid import uuid5, NAMESPACE_DNS
 
 from qdrant_client.http import models as qm
 
@@ -27,6 +26,7 @@ from app.ingestion.loaders.fireflies_loader import FirefliesLoader
 from app.ingestion.chunker import TokenChunker
 from app.embeddings.client import OllamaEmbeddingClient
 from app.vectorstore.qdrant import QdrantStore
+from app.utils.id_generator import stable_point_id
 
 logger = logging.getLogger(__name__)
 
@@ -39,12 +39,6 @@ UPSERT_BATCH = 100  # Upsert frequency
 SYNC_INTERVAL_MINUTES = 30  # Re-sync interval
 RATE_LIMIT_DELAY = 2.0  # Delay between API calls (seconds)
 MAX_CONSECUTIVE_SKIPS = 200  # Stop scanning after this many consecutive skips (all ingested)
-
-
-def _stable_point_id(*parts: str) -> str:
-    """Generate a stable UUID5 from multiple string parts."""
-    composite = ":".join(parts)
-    return uuid5(NAMESPACE_DNS, composite).hex
 
 
 class IngestionProgress:
@@ -311,7 +305,7 @@ class BackgroundIngestionService:
                             }
                             
                             section_id = rec["metadata"].get("chunk_index", idx)
-                            point_id = _stable_point_id("fireflies", transcript_id, str(section_id), str(idx))
+                            point_id = stable_point_id("fireflies", transcript_id, str(section_id), str(idx))
                             
                             points_buffer.append(
                                 qm.PointStruct(id=point_id, vector=vector, payload=payload)

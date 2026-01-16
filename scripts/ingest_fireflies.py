@@ -9,7 +9,6 @@ Uses nomic-embed-text with search_document: prefix for asymmetric search.
 import asyncio
 import sys
 from pathlib import Path
-from uuid import uuid5, NAMESPACE_DNS
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -20,21 +19,13 @@ from app.ingestion.loaders.fireflies_loader import FirefliesLoader
 from app.ingestion.chunker import TokenChunker
 from app.embeddings.client import OllamaEmbeddingClient
 from app.vectorstore.qdrant import QdrantStore
+from app.utils.id_generator import stable_point_id
 
 
 # Configuration
 WAVE_SIZE = 50  # Process this many transcripts per wave
 UPSERT_BATCH = 100  # Upsert to Qdrant every N transcripts
 EMBEDDING_BATCH_SIZE = 8  # Embed this many chunks in parallel (increased from 5)
-
-
-def _stable_point_id(*parts: str) -> str:
-    """Generate a stable UUID5 from multiple string parts.
-    Returns UUID string which Qdrant accepts as a valid point ID.
-    """
-    composite = ":".join(parts)
-    # Return the UUID object's string representation (formatted as UUID)
-    return uuid5(NAMESPACE_DNS, composite).hex  # Use hex format or just return str(uuid)
 
 
 async def embed_chunks_batch(texts: list[str], embedder: OllamaEmbeddingClient) -> list[list[float]]:
@@ -130,7 +121,7 @@ async def main():
 
                     # Use same ID generation as ingestion_service for consistency
                     section_id = rec["metadata"].get("chunk_index", idx)
-                    point_id = _stable_point_id("fireflies", transcript_id, str(section_id), str(idx))
+                    point_id = stable_point_id("fireflies", transcript_id, str(section_id), str(idx))
 
                     points_buffer.append(
                         qm.PointStruct(

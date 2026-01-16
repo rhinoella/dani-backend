@@ -11,8 +11,8 @@ from app.cache.semantic_cache import (
     SemanticCache,
     ResponseCache,
     CacheEntry,
-    cosine_similarity,
 )
+from app.utils.similarity import cosine_similarity
 
 
 class TestCosineSimiilarity:

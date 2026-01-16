@@ -30,21 +30,12 @@ from app.schemas.retrieval import MetadataFilter
 from app.mcp.client import extract_all_content, extract_text
 from app.database.models.infographic import (
     Infographic as InfographicModel,
-    InfographicStyle as InfographicStyleDB,
+    InfographicStyle,
     InfographicStatus,
 )
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
-
-
-class InfographicStyle(str, Enum):
-    """Supported infographic visual styles."""
-    MODERN = "modern"
-    CORPORATE = "corporate"
-    MINIMAL = "minimal"
-    VIBRANT = "vibrant"
-    DARK = "dark"
 
 
 # Style-specific visual prompts for image generation
@@ -120,10 +111,6 @@ class InfographicService:
             from app.mcp.registry import get_registry
             self._mcp_registry = get_registry()
         return self._mcp_registry
-    
-    def _style_to_db(self, style: InfographicStyle) -> InfographicStyleDB:
-        """Convert service style enum to database enum."""
-        return InfographicStyleDB(style.value)
 
     async def generate(
         self,
@@ -740,7 +727,7 @@ Generate a complete infographic image, NOT a photograph or illustration of peopl
             user_id=user_id,
             request=request,
             topic=topic,
-            style=self._style_to_db(style),
+            style=style,
             width=width,
             height=height,
             headline=structured_data.get("headline"),

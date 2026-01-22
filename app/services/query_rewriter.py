@@ -200,7 +200,7 @@ REWRITTEN QUERY:"""
                 rewritten = rewritten[1:-1]
             
             # Sanity check: don't use if it's too different or looks like an answer
-            if len(rewritten) > len(query) * 3:
+            if len(rewritten) > min(len(query) * 5, 500):  # Allow up to 5x original length or 500 chars
                 logger.warning(f"Rewritten query too long, using original")
                 return query
             

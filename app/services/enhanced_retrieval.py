@@ -71,7 +71,7 @@ Output {num_variants} queries, one per line, without numbering:"""
         """Generate query variants for better recall."""
         try:
             prompt = self.EXPANSION_PROMPT.format(query=query, num_variants=num_variants)
-            response = await self.llm.generate(prompt, max_tokens=200)
+            response = await self.llm.generate(prompt, options={"num_predict": 200})
             
             # Parse variants
             variants = [query]  # Always include original
@@ -128,7 +128,7 @@ Output ONLY a number from 0-10:"""
                     query=query,
                     chunk=chunk.get("text", "")[:1000]
                 )
-                response = await self.llm.generate(prompt, max_tokens=10)
+                response = await self.llm.generate(prompt, options={"num_predict": 10})
                 
                 # Parse score
                 score = float(response.strip().split()[0])
@@ -194,7 +194,7 @@ Relevant sentences:"""
             
             try:
                 prompt = self.COMPRESSION_PROMPT.format(query=query, text=text[:2000])
-                compressed = await self.llm.generate(prompt, max_tokens=500)
+                compressed = await self.llm.generate(prompt, options={"num_predict": 500})
                 
                 if "NOT_RELEVANT" in compressed.upper():
                     return None

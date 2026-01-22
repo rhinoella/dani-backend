@@ -48,10 +48,17 @@ class QueryProcessor:
             r"decisions?|decided|agreed|concluded|resolved",
             r"what did we decide|final decision",
         ],
+        "factual": [
+            r"what.*about|what.*regarding|what.*concerning",
+            r"tell me about|explain|describe",
+            r"how does|how do|how to",
+            r"what are|what is|what were|what was",
+        ],
         "person_search": [
-            r"(what did|did)\s+\w+\s+(say|mention|discuss|talk about)",
-            r"\w+'s (thoughts|opinion|view|perspective)",
-            r"(from|by|according to)\s+\w+",
+            r"(what did|did)\s+(he|she|they|you|i)\s+(say|mention|discuss|talk about)",
+            r"\b(john|jane|mary|david|sarah|mark|paul|lisa|chris|mike|anna|emma|olivia|noah|liam|oliver|elijah|william|james)\b.*(say|mention|think|believe|opinion)",
+            r"(from|by|according to)\s+(him|her|them|john|jane|mary|david|sarah)",
+            r"\w+'s\s+(thoughts|opinion|view|perspective|comments|feedback)",
         ],
         "comparison": [
             r"compare|comparison|versus|vs\.?|difference",
@@ -239,8 +246,8 @@ class ConfidenceScorer:
     def __init__(
         self,
         min_chunks_for_high_confidence: int = 3,
-        min_avg_similarity: float = 0.40,   # Proper threshold with fixed embeddings
-        min_top_similarity: float = 0.50,   # Proper threshold with fixed embeddings
+        min_avg_similarity: float = 0.20,   # Lowered from 0.40 for current embedding quality
+        min_top_similarity: float = 0.25,   # Lowered from 0.50 for current embedding quality
     ):
         self.min_chunks = min_chunks_for_high_confidence
         self.min_avg_similarity = min_avg_similarity

@@ -22,7 +22,7 @@ class SourceReference(BaseModel):
     date: Optional[Union[str, int]] = None
     transcript_id: Optional[str] = None
     speakers: Optional[List[str]] = []
-    text_preview: Optional[str] = None
+    text: Optional[str] = None
     relevance_score: Optional[float] = None
     raw_score: Optional[float] = None
     

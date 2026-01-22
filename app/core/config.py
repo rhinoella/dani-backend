@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     MAX_MESSAGE_LENGTH: int = 8000           # Increased from 4000 for longer messages
     
     MIN_HISTORY_MESSAGES: int = 6
-    MAX_HISTORY_MESSAGES: int = 25     # Increased from 15 for better context
+    MAX_HISTORY_MESSAGES: int = 10     # Reduced for faster retrieval
     SUMMARIZE_AFTER_MESSAGES: int = 20
     CONTEXT_BUDGET_TOKENS: int = 4000  # Increased from 2000 for longer conversations
     TOKENS_PER_MESSAGE_ESTIMATE: int = 150
@@ -115,13 +115,13 @@ class Settings(BaseSettings):
     EMBEDDING_CACHE_MAX_SIZE: int = 1000  # Increased from 500 for better caching
     
     HYBRID_SEARCH_ENABLED: bool = True
-    HYBRID_VECTOR_WEIGHT: float = 0.6
-    HYBRID_KEYWORD_WEIGHT: float = 0.4
+    HYBRID_VECTOR_WEIGHT: float = 0.5
+    HYBRID_KEYWORD_WEIGHT: float = 0.5
     
     ADAPTIVE_RETRIEVAL_ENABLED: bool = True
-    ADAPTIVE_MIN_SIMILARITY: float = 0.35  # Raised from 0.05 - proper threshold for nomic-embed-text
+    ADAPTIVE_MIN_SIMILARITY: float = 0.10  # Lowered from 0.35 - current embeddings give ~0.15-0.18 scores
     ADAPTIVE_MAX_CHUNKS: int = 25
-    ADAPTIVE_MIN_CHUNKS: int = 3
+    ADAPTIVE_MIN_CHUNKS: int = 5
     
     RERANKING_ENABLED: bool = True
     CROSS_ENCODER_ENABLED: bool = False

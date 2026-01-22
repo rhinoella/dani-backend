@@ -285,10 +285,20 @@ class HybridSearcher:
             limit=limit * 2,  # Get more for merging
         )
         
+        # Adaptive weighting: if vector similarity is low, boost keyword search
+        top_vector_score = vector_results[0].score if vector_results else 0.0
+        if top_vector_score < 0.25:  # Low similarity threshold
+            # Boost keyword weight when semantic search is weak
+            vector_weight = max(0.2, self.vector_weight - 0.2)
+            keyword_weight = min(0.8, self.keyword_weight + 0.2)
+        else:
+            vector_weight = self.vector_weight
+            keyword_weight = self.keyword_weight
+        
         # Merge using RRF
         merged = self.reciprocal_rank_fusion(
             [vector_results, keyword_results],
-            [self.vector_weight, self.keyword_weight],
+            [vector_weight, keyword_weight],
         )
         
         return merged[:limit]
@@ -308,7 +318,7 @@ class AdaptiveRetriever:
         min_similarity: Optional[float] = None,
         max_chunks: Optional[int] = None,
         min_chunks: Optional[int] = None,
-        drop_off_threshold: float = 0.10,  # 10% drop-off threshold
+        drop_off_threshold: float = 0.20,  # 20% drop-off threshold (increased from 10%)
     ):
         # Use settings if not explicitly provided
         self.min_similarity = min_similarity if min_similarity is not None else settings.ADAPTIVE_MIN_SIMILARITY

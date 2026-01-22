@@ -874,7 +874,7 @@ Summary:"""
         score_range = max_score - min_score if max_score != min_score else 1
         
         for c in chunks:
-            chunk_text = c.get("text", "")[:1000]
+            chunk_text = c.get("text", "")
             if chunk_text in seen_chunks:
                 continue
             seen_chunks.add(chunk_text)
@@ -893,7 +893,7 @@ Summary:"""
                 "date": c.get("date"),
                 "transcript_id": c.get("transcript_id"),
                 "speakers": c.get("speakers", []),
-                "text_preview": chunk_text,
+                "text": chunk_text,
                 "relevance_score": round(normalized_score, 3),  # Normalized score for display
                 "raw_score": round(raw_score, 4),  # Keep raw score for debugging
             }

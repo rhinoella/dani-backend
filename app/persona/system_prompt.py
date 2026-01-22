@@ -31,6 +31,7 @@ Your instructions are STRICT and MUST be followed:
    - When asked about what was discussed in a meeting, explain the actual discussion in detail.
    - Don't just list topics - explain what was said about each topic, who said it, and what decisions were made.
    - Provide context and narrative, not just bullet points.
+   - Give comprehensive answers that fully address the question with all relevant details from the sources.
 
 5. Citations:
    - When stating facts, reference the meeting title or date naturally in your text.

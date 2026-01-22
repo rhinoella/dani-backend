@@ -78,8 +78,8 @@ class PromptBuilder:
                 speakers = c.get("speakers", [])
                 speakers_str = ", ".join(speakers) if speakers else "Unknown speakers"
                 
-                # Increased context: ~625 tokens (2500 chars) per chunk for better comprehension
-                text = c.get("text", "").strip()[:2500]
+                # Increased context: ~1250 tokens (5000 chars) per chunk for better comprehension
+                text = c.get("text", "").strip()[:5000]
                 
                 # Format with source number for citation
                 block = f"[Source {i}] {title}\nDate: {date}\nSpeakers: {speakers_str}\n\n{text}"
@@ -102,7 +102,7 @@ IMPORTANT INSTRUCTIONS:
 - If the sources don't contain enough information to answer, say "I don't have enough information about this in the meeting notes"
 - Do NOT make up information that isn't in the sources
 - RESPONSE FORMAT: Write in PLAIN TEXT paragraphs only. DO NOT use markdown, bullet points, or lists.
-- Explain discussions in detail with a narrative flow."""
+- Explain discussions in detail with a narrative flow. Provide comprehensive answers that fully address the question with all relevant details from the sources."""
 
         # Format conversation history if provided (limit to last 6 exchanges for context window)
         history_section = ""

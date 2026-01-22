@@ -166,6 +166,9 @@ class BackgroundIngestionService:
             logger.warning("Fireflies API key not configured - background ingestion disabled")
             return
         
+        # Reset sync progress flag so ingestion runs on startup
+        self.progress.end_sync("Service restarted")
+        
         self._running = True
         self._task = asyncio.create_task(self._run_sync_loop())
         logger.info("Background ingestion service started")
@@ -187,7 +190,15 @@ class BackgroundIngestionService:
             try:
                 await self._sync_transcripts()
             except Exception as e:
-                logger.error(f"Background sync failed: {e}")
+                error_str = str(e).lower()
+                if "502" in error_str or "bad gateway" in error_str:
+                    logger.error(f"Sync failed: Fireflies server temporarily unavailable (502 Bad Gateway): {e}")
+                elif "503" in error_str or "service unavailable" in error_str:
+                    logger.error(f"Sync failed: Fireflies service unavailable (503): {e}")
+                elif "504" in error_str or "gateway timeout" in error_str:
+                    logger.error(f"Sync failed: Fireflies gateway timeout (504): {e}")
+                else:
+                    logger.error(f"Background sync failed: {e}")
                 self.progress.end_sync(str(e))
             
             # Wait before next sync
@@ -230,13 +241,27 @@ class BackgroundIngestionService:
                 try:
                     batch = await self.loader.list_transcripts(limit=WAVE_SIZE, skip=skip)
                 except Exception as e:
-                    if "429" in str(e) or "too_many_requests" in str(e).lower():
+                    error_str = str(e).lower()
+                    if "429" in error_str or "too_many_requests" in error_str:
                         # Rate limited on list - wait and retry
                         logger.warning(f"⏳ Rate limited on list, waiting {rate_limit_backoff}s...")
                         await asyncio.sleep(rate_limit_backoff)
                         rate_limit_backoff = min(rate_limit_backoff * 2, 120)  # Exponential backoff, max 2 min
                         continue
-                    raise
+                    elif "502" in error_str or "bad gateway" in error_str:
+                        # Server error - log and let sync loop handle retry
+                        logger.error(f"🔴 Fireflies server error (502 Bad Gateway): {e}")
+                        raise  # Re-raise to trigger sync loop retry
+                    elif "503" in error_str or "service unavailable" in error_str:
+                        logger.error(f"🔴 Fireflies service unavailable (503): {e}")
+                        raise
+                    elif "504" in error_str or "gateway timeout" in error_str:
+                        logger.error(f"🔴 Fireflies gateway timeout (504): {e}")
+                        raise
+                    else:
+                        # Other errors
+                        logger.error(f"🔴 Fireflies API error: {e}")
+                        raise
                 
                 if not batch:
                     logger.info("   No more transcripts to fetch")

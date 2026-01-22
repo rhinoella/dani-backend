@@ -34,7 +34,7 @@ class FirefliesLoader:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type(httpx.HTTPStatusError),
+        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ConnectError, httpx.TimeoutException)),
         reraise=True,
     )
     async def _execute(
@@ -60,6 +60,13 @@ class FirefliesLoader:
                 if response.status_code == 429:
                     raise httpx.HTTPStatusError(
                         f"Rate limit exceeded: {error_data}",
+                        request=response.request,
+                        response=response,
+                    )
+                # Server error detection (502, 503, 504)
+                elif response.status_code in (502, 503, 504):
+                    raise httpx.HTTPStatusError(
+                        f"Fireflies server error (HTTP {response.status_code}): {error_data}",
                         request=response.request,
                         response=response,
                     )

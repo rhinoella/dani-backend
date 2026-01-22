@@ -28,7 +28,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 # Global service instance (for non-authenticated requests)
-service = ChatService()
+service = ChatService(use_enhanced_retrieval=True)
 
 
 class ChatRequest(BaseModel):
@@ -286,7 +286,7 @@ async def chat(
                                 "date": s.get("date"),
                                 "transcript_id": s.get("transcript_id"),
                                 "speakers": s.get("speakers", []),
-                                "text_preview": s.get("text_preview"),
+                                "text": s.get("text"),
                                 "relevance_score": s.get("relevance_score"),
                             }
                             for s in sources
@@ -546,7 +546,7 @@ async def edit_message_and_regenerate(
                         "date": s.get("date"),
                         "transcript_id": s.get("transcript_id"),
                         "speakers": s.get("speakers", []),
-                        "text_preview": s.get("text_preview"),
+                        "text": s.get("text"),
                         "relevance_score": s.get("relevance_score"),
                     }
                     for s in sources

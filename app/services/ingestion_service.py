@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from qdrant_client.http import models as qm
 
 from app.core.config import settings
+from app.core.metrics import metrics
 from app.embeddings.client import OllamaEmbeddingClient
 from app.ingestion.pipeline import IngestionPipeline
 from app.ingestion.loaders.fireflies_loader import FirefliesLoader
@@ -26,13 +27,29 @@ class IngestionService:
         self.collection = settings.QDRANT_COLLECTION_TRANSCRIPTS
 
     async def ingest_transcript(self, transcript_id: str) -> Dict[str, Any]:
+        import time
+        start_time = time.time()
+        
         logger.info(f"Starting ingestion for transcript: {transcript_id}")
         
-        # 1) pull transcript (sentences) from Fireflies
+        # Check if already being processed (basic duplicate prevention)
+        # This is a simple check - for production, consider Redis-based locking
+        processing_key = f"processing:{transcript_id}"
+        if hasattr(self, '_processing_cache') and processing_key in self._processing_cache:
+            logger.info(f"Transcript {transcript_id} already being processed, skipping")
+            return {"transcript_id": transcript_id, "ingested": 0, "skipped": 1, "reason": "already_processing"}
+        
+        # Mark as processing
+        if not hasattr(self, '_processing_cache'):
+            self._processing_cache = set()
+        self._processing_cache.add(processing_key)
         try:
             transcript = await self.loader.get_transcript(transcript_id)
         except Exception as e:
             logger.error(f"Failed to fetch transcript {transcript_id}: {e}")
+            # Clean up processing cache on error
+            if hasattr(self, '_processing_cache'):
+                self._processing_cache.discard(processing_key)
             raise RuntimeError(f"Failed to fetch transcript: {e}") from e
 
         # 2) normalize + chunk (your existing pipeline expects "meeting-like" dict;
@@ -42,13 +59,14 @@ class IngestionService:
             logger.warning(f"No chunks generated for transcript {transcript_id}")
             return {"transcript_id": transcript_id, "ingested": 0, "skipped": 0}
         
-        # Check chunk limit
-        if len(chunks) > settings.MAX_CHUNKS_PER_TRANSCRIPT:
+        # Check chunk limit with better memory management
+        max_chunks = min(settings.MAX_CHUNKS_PER_TRANSCRIPT, 500)  # Cap at 500 for memory
+        if len(chunks) > max_chunks:
             logger.warning(
                 f"Transcript {transcript_id} has {len(chunks)} chunks, "
-                f"truncating to {settings.MAX_CHUNKS_PER_TRANSCRIPT}"
+                f"truncating to {max_chunks} for memory efficiency"
             )
-            chunks = chunks[:settings.MAX_CHUNKS_PER_TRANSCRIPT]
+            chunks = chunks[:max_chunks]
 
         logger.info(f"Processing {len(chunks)} chunks for transcript {transcript_id}")
 
@@ -65,7 +83,7 @@ class IngestionService:
                 texts.append(enriched_text)
             
             # Use embed_documents() which adds the search_document: prefix for nomic-embed-text
-            vectors = await self.embedder.embed_documents(texts)
+            vectors = await self.embedder.embed_documents(texts, batch_size=32)  # Increased batch size
             vector_size = len(vectors[0])
         except Exception as e:
             logger.error(f"Embedding failed for transcript {transcript_id}: {e}")
@@ -115,11 +133,24 @@ class IngestionService:
         
         logger.info(f"Successfully ingested transcript {transcript_id}: {len(points)} chunks")
 
+        # Clean up processing cache
+        if hasattr(self, '_processing_cache'):
+            self._processing_cache.discard(processing_key)
+
+        # Calculate timing and metrics
+        end_time = time.time()
+        processing_time = end_time - start_time
+        chunks_per_second = len(points) / processing_time if processing_time > 0 else 0
+
+        logger.info(f"Ingestion metrics for {transcript_id}: time={processing_time:.2f}s, chunks={len(points)}, rate={chunks_per_second:.2f} chunks/sec")
+
         return {
             "transcript_id": transcript_id,
             "ingested": len(points),
             "collection": self.collection,
             "vector_size": vector_size,
+            "processing_time_seconds": processing_time,
+            "chunks_per_second": chunks_per_second,
         }
 
     async def ingest_recent_transcripts(self, limit: int = 10) -> Dict[str, Any]:

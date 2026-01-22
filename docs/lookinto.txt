@@ -1,0 +1,59 @@
+INFO:     127.0.0.1:50378 - "POST /api/v1/chat HTTP/1.1" 200 OK
+2026-01-21 11:45:25 | INFO     | app.services.chat_service | [STREAM] === Starting streaming response ===
+2026-01-21 11:45:25 | INFO     | app.services.chat_service | [STREAM] Query: tell me more...
+2026-01-21 11:45:25 | INFO     | app.services.chat_service | [STREAM] Conversation history: 7 messages
+2026-01-21 11:45:25 | INFO     | app.services.agent_service | [AGENT] Analyzing query: tell me more...
+2026-01-21 11:45:25 | INFO     | app.llm.ollama | Sending prompt to Ollama (1146 chars)
+2026-01-21 11:45:27 | INFO     | app.llm.ollama | Received response from Ollama
+2026-01-21 11:45:27 | INFO     | app.services.chat_service | [STREAM] Agent decision: {'intent': 'CHAT', 'tool_name': None, 'confidence': 0.95, 'reasoning': "The query 'tell me more' is a request for elaboration and doesn't involve generating any content or visuals.", 'tool_args': {}}
+2026-01-21 11:45:27 | INFO     | app.services.query_rewriter | Rewriting query: 'tell me more'
+2026-01-21 11:45:27 | INFO     | app.llm.ollama | Sending prompt to Ollama (2939 chars)
+2026-01-21 11:45:30 | INFO     | app.llm.ollama | Received response from Ollama
+2026-01-21 11:45:30 | WARNING  | app.services.query_rewriter | Rewritten query too long, using original (increase prompt lenght)
+2026-01-21 11:45:30 | INFO     | app.services.chat_service | [STREAM] Query rewrite check completed in 2404.72ms
+2026-01-21 11:46:27 | ERROR    | app.vectorstore.qdrant | Search failed in 'documents': Unexpected Response: 404 (Not Found) [file upload]
+
+
+2026-01-21 11:50:04 | INFO     | sqlalchemy.engine.Engine | [cached since 593.4s ago] ('3c041dff-af8f-499f-bd3f-6753ff7454bc',)
+2026-01-21 11:50:04 | INFO     | app.services.conversation_service | [CONV_SERVICE] Retrieved document_ids for da02d286-859c-42e6-9e01-e51b58fe055d: [] from metadata: {}
+2026-01-21 11:50:04 | INFO     | app.api.routes.chat | [CHAT] No new document_ids. Existing effective: []
+2026-01-21 11:50:04 | INFO     | app.api.routes.chat | [CHAT] Starting streaming response for conversation: da02d286-859c-42e6-9e01-e51b58fe055d
+2026-01-21 11:50:04 | INFO     | app.api.routes.chat | [CHAT] Loading conversation history for streaming context
+2026-01-21 11:50:04 | INFO     | app.api.routes.chat | [CHAT] Using enhanced semantic memory search
+2026-01-21 11:50:37 | INFO     | app.embeddings.client | Successfully embedded 7 texts
+2026-01-21 11:50:37 | INFO     | app.services.background_ingestion | [39] ✅ Brand & Comms Alignment Call (7 chunks)
+2026-01-21 11:50:41 | WARNING  | app.services.enhanced_memory | Entity extraction failed: OllamaClient.generate() got an unexpected keyword argument 'max_tokens'
+2026-01-21 11:50:41 | WARNING  | app.services.enhanced_memory | Topic summarization failed: OllamaClient.generate() got an unexpected keyword argument 'max_tokens'
+2026-01-21 11:50:41 | INFO     | app.api.routes.chat | [CHAT] Found 3 semantically relevant past messages
+2026-01-21 11:50:41 | INFO     | app.api.routes.chat | [CHAT] Extracted entities: ['people', 'topics', 'dates', 'projects', 'metrics']
+2026-01-21 11:50:41 | INFO     | app.api.routes.chat | [CHAT] Loaded 9 history messages for streaming
+2026-01-21 11:50:41 | INFO     | app.api.routes.chat | [CHAT] Sending meta with conversation_id: da02d286-859c-42e6-9e01-e51b58fe055d
+INFO:     127.0.0.1:50484 - "POST /api/v1/chat HTTP/1.1" 200 OK
+2026-01-21 11:50:41 | INFO     | app.services.chat_service | [STREAM] === Starting streaming response ===
+2026-01-21 11:50:41 | INFO     | app.services.chat_service | [STREAM] Query: which fintech projects are in VGG ?...
+2026-01-21 11:50:41 | INFO     | app.services.chat_service | [STREAM] Conversation history: 9 messages
+2026-01-21 11:50:41 | INFO     | app.services.agent_service | [AGENT] Analyzing query: which fintech projects are in VGG ?...
+2026-01-21 11:50:41 | INFO     | app.llm.ollama | Sending prompt to Ollama (1169 chars)
+2026-01-21 11:50:41 | INFO     | app.embeddings.client | Embedding batch of 13 texts (batch_size=16)
+2026-01-21 11:50:44 | INFO     | app.llm.ollama | Received response from Ollama
+2026-01-21 11:50:44 | INFO     | app.services.chat_service | [STREAM] Agent decision: {'intent': 'CHAT', 'tool_name': None, 'confidence': 0.95, 'reasoning': 'The query is a question seeking information and does not involve generating any content or visuals.', 'tool_args': {}}
+2026-01-21 11:50:44 | INFO     | app.services.chat_service | [STREAM] Query rewrite check completed in 0.08ms
+
+
+
+response time is over 70 secs (I min) ->too long -> Past conversation being included in the prompt
+
+Response Timing
+Retrieval:
+81.3s
+Prompt:
+0ms
+Generation:
+3.7s
+Total:
+88.3s
+
+
+Cancelling response Generation
+response repetition ?? Upon user follow up
+

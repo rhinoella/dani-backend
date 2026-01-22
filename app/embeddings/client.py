@@ -39,7 +39,7 @@ class OllamaEmbeddingClient:
         # NOTE: Headers are NOT set here - they are set per-request to support dynamic API key changes
         self.client = httpx.AsyncClient(
             timeout=self.timeout,
-            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),  # Increased from 10/5
         )
     
     def _get_headers(self) -> dict:
@@ -76,7 +76,7 @@ class OllamaEmbeddingClient:
         prefixed_text = f"{self.DOCUMENT_PREFIX}{text}"
         return await self.embed_one(prefixed_text)
     
-    async def embed_documents(self, texts: List[str], batch_size: int = 8) -> List[List[float]]:
+    async def embed_documents(self, texts: List[str], batch_size: int = 16) -> List[List[float]]:  # Increased from 8
         """
         Batch embed documents with the search_document prefix.
         Use this during ingestion for better performance.
@@ -170,7 +170,7 @@ class OllamaEmbeddingClient:
 
         raise RuntimeError("Ollama embedding failed after retries")
 
-    async def embed_batch(self, texts: List[str], batch_size: int = 8) -> List[List[float]]:
+    async def embed_batch(self, texts: List[str], batch_size: int = 16) -> List[List[float]]:  # Increased from 8
         """
         Batch embedding with parallel processing.
         
@@ -178,7 +178,7 @@ class OllamaEmbeddingClient:
         
         Args:
             texts: List of texts to embed
-            batch_size: Number of concurrent embedding requests (default 8, increased from 2)
+            batch_size: Number of concurrent embedding requests (default 16, increased from 8)
                        Lower values = more reliable but slower
                        Higher values = faster but more memory/load on Ollama
         """

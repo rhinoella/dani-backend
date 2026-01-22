@@ -467,6 +467,14 @@ class InfographicService:
                 response = re.sub(r"```(?:json)?\n?", "", response)
                 response = response.rstrip("`").strip()
             
+            # Find JSON object by looking for { and }
+            # This handles cases where LLM adds text before/after JSON
+            json_start = response.find('{')
+            if json_start != -1:
+                json_end = response.rfind('}')
+                if json_end != -1 and json_end > json_start:
+                    response = response[json_start:json_end+1]
+            
             data = json.loads(response)
             
             # Validate required fields
@@ -479,6 +487,7 @@ class InfographicService:
             
         except json.JSONDecodeError as e:
             logger.error(f"[INFOGRAPHIC] JSON parse error: {e}")
+            logger.error(f"[INFOGRAPHIC] Response was: {response[:500]}")
             return {"error": f"Failed to parse structured data: {str(e)}"}
         except Exception as e:
             logger.error(f"[INFOGRAPHIC] Extraction failed: {e}")

@@ -16,7 +16,7 @@ from app.core.circuit_breaker import qdrant_breaker, CircuitBreakerOpen
 logger = logging.getLogger(__name__)
 
 # Thread pool for running sync Qdrant operations without blocking event loop
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="qdrant")
+_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="qdrant")  # Increased from 4
 
 # Retry decorator for Qdrant operations
 qdrant_retry = retry(

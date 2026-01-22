@@ -8,10 +8,16 @@ from app.ingestion.chunker import TokenChunker
 
 class IngestionPipeline:
     def __init__(self):
-        self.chunker = TokenChunker(
+        # Optimized chunking for different content types
+        self.transcript_chunker = TokenChunker(
             chunk_size=400,    # Slightly larger chunks for better context
             overlap=100,
             speaker_aware=True
+        )
+        self.document_chunker = TokenChunker(
+            chunk_size=400,    # Match transcript chunking for consistency
+            overlap=100,
+            speaker_aware=False  # Documents don't have speakers
         )
 
     def process_fireflies_meeting(self, meeting: Dict) -> List[Dict]:
@@ -40,12 +46,12 @@ class IngestionPipeline:
             normalized = normalize_fireflies_transcript(meeting)
             chunks: List[Dict] = []
             for record in normalized:
-                chunks.extend(self.chunker.chunk(record))
+                chunks.extend(self.transcript_chunker.chunk(record))  # Use transcript chunker
             return chunks
         
         # Use speaker-aware chunking for better semantic coherence
         # This groups consecutive utterances by speaker and creates
         # larger, more meaningful chunks
-        chunks = self.chunker.chunk_with_speakers(sentences, metadata)
+        chunks = self.transcript_chunker.chunk_with_speakers(sentences, metadata)
         
         return chunks

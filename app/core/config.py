@@ -41,9 +41,9 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "ministral-3:8b"
     EMBEDDING_MODEL: str = "nomic-embed-text"
     
-    LLM_NUM_CTX: int = 4096
+    LLM_NUM_CTX: int = 8192      # Increased from 4096 for better context
     LLM_NUM_PREDICT: int = 2048
-    LLM_NUM_THREAD: int = 4
+    LLM_NUM_THREAD: int = 8      # Increased from 4 for better performance
     LLM_TEMPERATURE: float = 0.7
 
     QDRANT_URL: str = "http://localhost:6333"
@@ -58,8 +58,8 @@ class Settings(BaseSettings):
     DB_USERNAME: str = "dani"
     DB_PASSWORD: str = "dani_secret_2024"
     
-    DATABASE_POOL_SIZE: int = 10
-    DATABASE_MAX_OVERFLOW: int = 20
+    DATABASE_POOL_SIZE: int = 20      # Increased from 10 for more concurrent users
+    DATABASE_MAX_OVERFLOW: int = 50   # Increased from 20 for traffic spikes
     DATABASE_POOL_TIMEOUT: int = 30
     
     @computed_field
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
         return f"{self.DB_CONNECTION}://{self.DB_USERNAME}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_DATABASE}"
     
     REDIS_URL: str = "redis://localhost:6379/0"
-    REDIS_MAX_CONNECTIONS: int = 20
+    REDIS_MAX_CONNECTIONS: int = 50   # Increased from 20 for better caching
     REDIS_SOCKET_TIMEOUT: float = 5.0
     REDIS_SOCKET_CONNECT_TIMEOUT: float = 5.0
     
@@ -80,17 +80,17 @@ class Settings(BaseSettings):
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_PER_MINUTE: int = 20
-    RATE_LIMIT_PER_DAY: int = 500
+    RATE_LIMIT_PER_MINUTE: int = 50   # Increased from 20 for more requests
+    RATE_LIMIT_PER_DAY: int = 1000    # Increased from 500 for more daily usage
     
-    MAX_CONVERSATIONS_PER_USER: int = 100
-    MAX_MESSAGES_PER_CONVERSATION: int = 200
-    MAX_MESSAGE_LENGTH: int = 4000
+    MAX_CONVERSATIONS_PER_USER: int = 500   # Increased from 100 for more conversations
+    MAX_MESSAGES_PER_CONVERSATION: int = 500  # Increased from 200 for longer conversations
+    MAX_MESSAGE_LENGTH: int = 8000           # Increased from 4000 for longer messages
     
     MIN_HISTORY_MESSAGES: int = 6
-    MAX_HISTORY_MESSAGES: int = 15
+    MAX_HISTORY_MESSAGES: int = 25     # Increased from 15 for better context
     SUMMARIZE_AFTER_MESSAGES: int = 20
-    CONTEXT_BUDGET_TOKENS: int = 2000
+    CONTEXT_BUDGET_TOKENS: int = 4000  # Increased from 2000 for longer conversations
     TOKENS_PER_MESSAGE_ESTIMATE: int = 150
     CONTEXT_TOKEN_BUDGET: int = 2000
     SUMMARIZE_THRESHOLD: int = 20
@@ -102,17 +102,17 @@ class Settings(BaseSettings):
     MAX_TRANSCRIPT_SIZE_MB: float = 10.0
     MAX_CHUNKS_PER_TRANSCRIPT: int = 1000
     MAX_QUERY_LENGTH: int = 10000
-    MAX_BATCH_SIZE: int = 50
+    MAX_BATCH_SIZE: int = 100   # Increased from 50 for faster bulk operations
     
     SEMANTIC_CACHE_ENABLED: bool = True
     SEMANTIC_CACHE_SIMILARITY_THRESHOLD: float = 0.92
     SEMANTIC_CACHE_TTL_SECONDS: int = 1800
-    SEMANTIC_CACHE_MAX_SIZE: int = 200
+    SEMANTIC_CACHE_MAX_SIZE: int = 500   # Increased from 200 for better caching
     
     EMBEDDING_CACHE_ENABLED: bool = True
     EMBEDDING_CACHE_SIMILARITY_THRESHOLD: float = 0.98
     EMBEDDING_CACHE_TTL_SECONDS: int = 3600
-    EMBEDDING_CACHE_MAX_SIZE: int = 500
+    EMBEDDING_CACHE_MAX_SIZE: int = 1000  # Increased from 500 for better caching
     
     HYBRID_SEARCH_ENABLED: bool = True
     HYBRID_VECTOR_WEIGHT: float = 0.6
@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     
     ADAPTIVE_RETRIEVAL_ENABLED: bool = True
     ADAPTIVE_MIN_SIMILARITY: float = 0.35  # Raised from 0.05 - proper threshold for nomic-embed-text
-    ADAPTIVE_MAX_CHUNKS: int = 20
+    ADAPTIVE_MAX_CHUNKS: int = 25
     ADAPTIVE_MIN_CHUNKS: int = 3
     
     RERANKING_ENABLED: bool = True
@@ -161,7 +161,7 @@ class Settings(BaseSettings):
     MCP_RETRY_DELAY: float = 1.0
     MCP_AUTO_RECONNECT: bool = True
     MCP_HEALTH_CHECK_INTERVAL: int = 60
-    MCP_MAX_CONCURRENT_CALLS: int = 5
+    MCP_MAX_CONCURRENT_CALLS: int = 10   # Increased from 5 for better tool usage
     MCP_ALLOWED_COMMANDS: str = "npx,uvx,node,python"
 
     @field_validator("FIREFLIES_API_KEY")

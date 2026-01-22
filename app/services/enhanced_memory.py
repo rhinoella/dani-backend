@@ -152,7 +152,7 @@ Output ONLY valid JSON:"""
         
         try:
             prompt = self.EXTRACTION_PROMPT.format(text=text)
-            response = await self.llm.generate(prompt, max_tokens=300)
+            response = await self.llm.generate(prompt, options={"num_predict": 300})
             
             # Parse JSON
             import json
@@ -201,7 +201,7 @@ Write a brief 2-3 sentence summary:"""
             ])
             
             prompt = self.SUMMARY_PROMPT.format(conversation=conversation)
-            summary = await self.llm.generate(prompt, max_tokens=150)
+            summary = await self.llm.generate(prompt, options={"num_predict": 150})
             
             return summary.strip()
         except Exception as e:

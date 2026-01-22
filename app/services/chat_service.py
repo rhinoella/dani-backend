@@ -71,8 +71,8 @@ class ChatService:
         self._conversation_cache: Optional[ConversationCache] = None
         
         # Context window limits
-        self.max_history_messages = 10  # Keep last 10 messages
-        self.max_history_tokens = 2000  # Max tokens for history
+        self.max_history_messages = 25  # Increased from 10 to match config
+        self.max_history_tokens = 4000  # Increased from 2000 to match config
         self.summarize_threshold = 20  # Summarize after 20 messages
     
     def set_conversation_cache(self, cache: ConversationCache) -> None:
@@ -331,7 +331,7 @@ Summary:"""
             
             retrieval_result = await self.retrieval.search_with_confidence(
                 query=retrieval_query, 
-                limit=5,
+                limit=25,
                 metadata_filter=metadata_filter,
             )
             chunks = retrieval_result["chunks"]
@@ -820,7 +820,7 @@ Summary:"""
         
         retrieval_result = await self.retrieval.search_with_confidence(
             query=retrieval_query, 
-            limit=5,
+            limit=25,
             metadata_filter=metadata_filter,
         )
         chunks = retrieval_result["chunks"]

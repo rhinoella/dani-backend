@@ -91,7 +91,7 @@ class DocumentService:
         self.txt_loader = TXTLoader()
         
         # Processing components
-        self.chunker = TokenChunker(chunk_size=350, overlap=100)
+        self.chunker = TokenChunker(chunk_size=400, overlap=100)  # Match transcript chunking
         self.embedder = OllamaEmbeddingClient()
         self.store = QdrantStore()
         self.collection = settings.QDRANT_COLLECTION_DOCUMENTS
@@ -224,6 +224,9 @@ class DocumentService:
     
     async def process_document(self, document: Document, file_content: bytes) -> None:
         """Process document: extract text, chunk, embed, store."""
+        import time
+        start_time = time.time()
+        
         try:
             logger.info(f"Processing document: {document.id} ({document.file_type})")
             
@@ -258,14 +261,15 @@ class DocumentService:
             # 3) Embed chunks with contextual enrichment and proper prefix
             # Enrich text with metadata for better semantic matching
             texts = []
-            for c in chunk_records:
+            for i, c in enumerate(chunk_records):
                 title = document.title or document.filename
+                section = f"Section {i + 1}"
                 # Include context in the text for better embedding quality
-                enriched_text = f"Document: {title}. Content: {c['text']}"
+                enriched_text = f"Document: {title}. Section: {section}. Content: {c['text']}"
                 texts.append(enriched_text)
             
             # Use embed_documents() which adds the search_document: prefix for nomic-embed-text
-            vectors = await self.embedder.embed_documents(texts)
+            vectors = await self.embedder.embed_documents(texts, batch_size=32)  # Increased batch size
             vector_size = len(vectors[0])
             
             # 4) Ensure collection exists
@@ -314,6 +318,14 @@ class DocumentService:
             await self.session.commit()
             
             logger.info(f"Document {document.id} processed successfully")
+            
+            # Calculate timing and metrics
+            end_time = time.time()
+            processing_time = end_time - start_time
+            chunks_per_second = len(points) / processing_time if processing_time > 0 else 0
+            tokens_per_second = total_tokens / processing_time if processing_time > 0 else 0
+            
+            logger.info(f"Document processing metrics for {document.id}: time={processing_time:.2f}s, chunks={len(points)}, tokens={total_tokens}, chunks/sec={chunks_per_second:.2f}, tokens/sec={tokens_per_second:.2f}")
             
         except Exception as e:
             logger.error(f"Document processing failed: {e}")

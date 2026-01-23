@@ -153,7 +153,13 @@ class NanoBananaClient:
             name=self.server_name,
             command="npx",
             args=["nano-banana-mcp"],
-            env={"GEMINI_API_KEY": self.api_key},
+            env={
+                "GEMINI_API_KEY": self.api_key,
+                # Use the correct model that supports image generation
+                "GEMINI_MODEL": "nano-banana-pro-preview",
+                "MODEL": "nano-banana-pro-preview",
+                "GOOGLE_MODEL": "nano-banana-pro-preview",
+            },
             description="Nano Banana image generation",
         )
 

@@ -4,9 +4,11 @@ Test MCP Image Generation
 """
 
 import asyncio
+import pytest
 from app.mcp.client import MCPClient
 from app.mcp.schemas import MCPServerConfig
 
+@pytest.mark.asyncio
 async def test_mcp_image_generation():
     print('=== MCP IMAGE GENERATION TEST ===')
 
@@ -62,6 +64,3 @@ async def test_mcp_image_generation():
         print(f'❌ MCP test failed: {e}')
         import traceback
         traceback.print_exc()
-
-if __name__ == "__main__":
-    asyncio.run(test_mcp_image_generation())

@@ -241,6 +241,7 @@ async def chat(
                     conversation_history=conversation_history,
                     conversation_id=conversation_id if current_user else None,
                     session=db if current_user else None,
+                    user_id=str(current_user.id) if current_user else None,
                     doc_type=req.doc_type,
                     document_ids=effective_document_ids if effective_document_ids else None,
                 ):
@@ -286,8 +287,11 @@ async def chat(
                                 "date": s.get("date"),
                                 "transcript_id": s.get("transcript_id"),
                                 "speakers": s.get("speakers", []),
-                                "text": s.get("text"),
+                                "text": s.get("text") or s.get("text_preview"),
+                                "text_preview": s.get("text_preview") or s.get("text"),
                                 "relevance_score": s.get("relevance_score"),
+                                "meeting_category": s.get("meeting_category"),
+                                "category_confidence": s.get("category_confidence"),
                             }
                             for s in sources
                         ]
@@ -296,7 +300,8 @@ async def chat(
                         content_to_store = full_response
                         if not content_to_store and tool_result:
                             if tool_name == "infographic_generator":
-                                content_to_store = "Generated infographic."
+                                headline = tool_result.get("structured_data", {}).get("headline", "")
+                                content_to_store = f"Generated infographic: {headline}" if headline else "Generated infographic."
                             elif tool_name == "content_writer":
                                 content_to_store = "Generated content."
                             else:
@@ -546,8 +551,11 @@ async def edit_message_and_regenerate(
                         "date": s.get("date"),
                         "transcript_id": s.get("transcript_id"),
                         "speakers": s.get("speakers", []),
-                        "text": s.get("text"),
+                        "text": s.get("text") or s.get("text_preview"),
+                        "text_preview": s.get("text_preview") or s.get("text"),
                         "relevance_score": s.get("relevance_score"),
+                        "meeting_category": s.get("meeting_category"),
+                        "category_confidence": s.get("category_confidence"),
                     }
                     for s in sources
                 ]

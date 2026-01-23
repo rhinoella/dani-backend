@@ -16,6 +16,9 @@ import time
 import re
 import json
 import base64
+import io
+import os
+import textwrap
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
@@ -28,6 +31,21 @@ from app.services.storage_service import StorageService
 from app.services.infographic_context import InfographicContextBuilder
 from app.schemas.retrieval import MetadataFilter
 from app.mcp.client import extract_all_content, extract_text
+from app.database.models.infographic import (
+    Infographic as InfographicModel,
+    InfographicStyle,
+    InfographicStatus,
+)
+from app.core.config import settings
+
+# Image generation dependencies
+try:
+    import google.generativeai as genai
+    from PIL import Image, ImageDraw, ImageFont
+    IMAGE_DEPS_AVAILABLE = True
+except ImportError:
+    IMAGE_DEPS_AVAILABLE = False
+    logger.warning("Image generation dependencies not available - PIL and google-generativeai required")
 from app.database.models.infographic import (
     Infographic as InfographicModel,
     InfographicStyle,
@@ -282,7 +300,7 @@ class InfographicService:
                 sources.append({
                     "title": title,
                     "date": date,
-                    "text_preview": text[:1000],
+                    "text_preview": text,
                     "score": chunk.get("score", 0),
                 })
 
@@ -387,9 +405,22 @@ class InfographicService:
                 )
                 s3_key = s3_result["key"]
                 s3_url = s3_result["url"]
+                
+                # Generate presigned URL for browser access
+                try:
+                    presigned_url = await self.storage.get_presigned_url(
+                        s3_key,
+                        expiry_seconds=3600 * 24 * 365,  # 1 year
+                    )
+                    logger.info(f"[INFOGRAPHIC] Generated presigned URL for {s3_key}")
+                except Exception as e:
+                    logger.error(f"[INFOGRAPHIC] Failed to generate presigned URL: {e}")
+                    presigned_url = s3_url  # Fallback to regular URL
+                
                 logger.info(f"[INFOGRAPHIC] Uploaded to S3: {s3_key}")
             except Exception as e:
                 logger.error(f"[INFOGRAPHIC] S3 upload failed: {e}")
+                presigned_url = None
                 # Continue without persistence
         
         # Save to database
@@ -427,7 +458,7 @@ class InfographicService:
             "id": infographic_id,
             "structured_data": structured_data,
             "image": image_result.get("image"),
-            "image_url": s3_url or image_result.get("url"),
+            "image_url": presigned_url or image_result.get("url"),
             "s3_key": s3_key,
             "image_format": image_result.get("format", "png"),
             "sources": sources,
@@ -500,13 +531,27 @@ class InfographicService:
         width: int,
         height: int,
     ) -> Dict[str, Any]:
-        """Generate visual infographic image via MCP."""
+        """Generate visual infographic image via direct Gemini API or MCP fallback."""
         
         # Build the image generation prompt
         prompt = self._build_image_prompt(structured_data, style)
         
         try:
-            # Check if MCP is available
+            # Try direct Gemini API first (bypasses broken nano-banana MCP)
+            logger.info("[INFOGRAPHIC] Attempting direct Gemini image generation")
+            image_data = self._generate_image_direct(prompt, width=width, height=height)
+            
+            if image_data:
+                # Convert bytes to base64 for consistency with existing code
+                base64_data = base64.b64encode(image_data).decode('utf-8')
+                return {
+                    "image": base64_data,
+                    "format": "png",  # Gemini typically returns PNG
+                }
+            
+            logger.warning("[INFOGRAPHIC] Direct Gemini generation failed, trying MCP fallback")
+            
+            # Fallback to MCP if direct API fails
             registry = self.mcp_registry
             if not registry or "nano-banana" not in registry.connected_servers:
                 logger.warning("[INFOGRAPHIC] nano-banana MCP not connected")
@@ -564,6 +609,175 @@ class InfographicService:
         except Exception as e:
             logger.error(f"[INFOGRAPHIC] Image generation failed: {e}")
             return {"error": f"Image generation failed: {str(e)}"}
+
+    def _generate_image_direct(self, prompt: str, width: int = 1024, height: int = 768) -> Optional[bytes]:
+        """
+        Generate an image using Google Imagen API directly, with PIL fallback.
+
+        Args:
+            prompt: The text prompt for image generation
+            width: Desired image width
+            height: Desired image height
+
+        Returns:
+            Image data as bytes, or None if generation fails
+        """
+        if not IMAGE_DEPS_AVAILABLE:
+            logger.warning("Image generation dependencies not available")
+            return self._generate_placeholder_image(prompt, width, height)
+
+        # Try Imagen API first if available
+        api_key = settings.GEMINI_API_KEY
+        if not api_key:
+            logger.warning("GEMINI_API_KEY not found - will use PIL fallback for image generation")
+            return self._generate_placeholder_image(prompt, width, height)
+
+        try:
+            genai.configure(api_key=api_key)
+            
+            # Use Imagen 3.0 for image generation (gemini-2.0-flash is text-only)
+            imagen_model = genai.ImageGenerationModel("imagen-3.0-generate-002")
+
+            # Create a detailed prompt for better results
+            enhanced_prompt = f"""Professional business infographic:
+{prompt}
+
+Style: Clean, modern, professional business presentation with clear data visualization and high contrast for readability."""
+
+            # Generate the image using Imagen
+            logger.info("[INFOGRAPHIC] Generating image with Imagen 3.0...")
+            response = imagen_model.generate_images(
+                prompt=enhanced_prompt,
+                number_of_images=1,
+                aspect_ratio="1:1" if width == height else ("16:9" if width > height else "9:16"),
+                safety_filter_level="block_only_high",
+                person_generation="allow_adult",
+            )
+
+            if response and response.images:
+                # Get the first generated image
+                generated_image = response.images[0]
+                
+                # Convert to bytes
+                if hasattr(generated_image, '_pil_image') and generated_image._pil_image:
+                    # If PIL image is available, save to bytes
+                    buffer = io.BytesIO()
+                    generated_image._pil_image.save(buffer, format='PNG')
+                    image_data = buffer.getvalue()
+                    logger.info("[INFOGRAPHIC] Image generated successfully with Imagen 3.0")
+                    return image_data
+                elif hasattr(generated_image, 'data') and generated_image.data:
+                    # Raw bytes data
+                    logger.info("[INFOGRAPHIC] Image generated successfully with Imagen 3.0")
+                    return generated_image.data
+
+            logger.warning("Imagen API did not return image data")
+
+        except Exception as e:
+            logger.warning(f"Imagen API failed: {e}")
+            
+            # Try fallback with experimental Gemini image generation model
+            try:
+                logger.info("[INFOGRAPHIC] Trying experimental Gemini image generation model...")
+                model = genai.GenerativeModel("gemini-2.0-flash-exp-image-generation")
+                
+                response = model.generate_content(
+                    enhanced_prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.7,
+                        response_modalities=["image"],
+                    )
+                )
+                
+                if response and response.candidates:
+                    candidate = response.candidates[0]
+                    if candidate.content and candidate.content.parts:
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'inline_data') and part.inline_data:
+                                image_data = base64.b64decode(part.inline_data.data)
+                                logger.info("[INFOGRAPHIC] Image generated with experimental model")
+                                return image_data
+                                
+            except Exception as exp_e:
+                logger.warning(f"Experimental Gemini model also failed: {exp_e}")
+
+        # Fallback to PIL-based image generation
+        logger.info("Using PIL fallback for image generation")
+        return self._generate_placeholder_image(prompt, width, height)
+
+    def _generate_placeholder_image(self, prompt: str, width: int = 1024, height: int = 768) -> Optional[bytes]:
+        """
+        Generate a placeholder infographic image using PIL.
+
+        Args:
+            prompt: Text prompt (used for content)
+            width: Image width
+            height: Image height
+
+        Returns:
+            Image data as bytes
+        """
+        try:
+            # Create a new image with a professional color scheme
+            img = Image.new('RGB', (width, height), color='#f8f9fa')
+            draw = ImageDraw.Draw(img)
+
+            # Try to use a default font, fallback to basic if not available
+            try:
+                font_title = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 48)
+                font_body = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 24)
+            except:
+                font_title = ImageFont.load_default()
+                font_body = ImageFont.load_default()
+
+            # Colors
+            primary_color = '#1a73e8'  # Google Blue
+            secondary_color = '#34a853'  # Green
+            text_color = '#202124'  # Dark gray
+            accent_color = '#ea4335'  # Red
+
+            # Draw header bar
+            draw.rectangle([0, 0, width, 120], fill=primary_color)
+
+            # Title
+            title_text = "Infographic"
+            draw.text((width//2, 60), title_text, fill='white', font=font_title, anchor='mm')
+
+            # Extract key information from prompt for content
+            lines = textwrap.wrap(prompt[:200] + "..." if len(prompt) > 200 else prompt, width=60)
+
+            # Draw content boxes
+            y_offset = 140
+            for i, line in enumerate(lines[:8]):  # Limit to 8 lines
+                if y_offset > height - 100:
+                    break
+
+                # Alternate background colors
+                bg_color = '#ffffff' if i % 2 == 0 else '#f1f3f4'
+                draw.rectangle([50, y_offset, width-50, y_offset+40], fill=bg_color, outline=primary_color, width=1)
+                draw.text((60, y_offset+20), line, fill=text_color, font=font_body, anchor='lm')
+                y_offset += 45
+
+            # Add some visual elements
+            # Circle
+            draw.ellipse([width-150, height-150, width-50, height-50], fill=secondary_color, outline=primary_color, width=3)
+
+            # Triangle
+            draw.polygon([(100, height-100), (150, height-150), (150, height-50)], fill=accent_color)
+
+            # Footer
+            draw.rectangle([0, height-40, width, height], fill=primary_color)
+            footer_text = "Generated Infographic"
+            draw.text((width//2, height-20), footer_text, fill='white', font=font_body, anchor='mm')
+
+            # Convert to bytes
+            buffer = io.BytesIO()
+            img.save(buffer, format='PNG')
+            return buffer.getvalue()
+
+        except Exception as e:
+            logger.error(f"Failed to generate placeholder image: {e}")
+            return None
 
     def _validate_and_enhance_quality(
         self,

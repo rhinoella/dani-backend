@@ -318,20 +318,27 @@ class AdaptiveRetriever:
         min_similarity: Optional[float] = None,
         max_chunks: Optional[int] = None,
         min_chunks: Optional[int] = None,
-        drop_off_threshold: float = 0.20,  # 20% drop-off threshold (increased from 10%)
+        drop_off_threshold: float = 0.15,  # 15% drop-off threshold - stop when quality drops
+        relative_threshold: float = 0.50,  # Results must be at least 50% of top score
     ):
         # Use settings if not explicitly provided
         self.min_similarity = min_similarity if min_similarity is not None else settings.ADAPTIVE_MIN_SIMILARITY
         self.max_chunks = max_chunks if max_chunks is not None else settings.ADAPTIVE_MAX_CHUNKS
         self.min_chunks = min_chunks if min_chunks is not None else settings.ADAPTIVE_MIN_CHUNKS
         self.drop_off_threshold = drop_off_threshold
+        self.relative_threshold = relative_threshold
     
     def filter_results(
         self,
         results: List[SearchResult],
     ) -> Tuple[List[SearchResult], Dict[str, Any]]:
         """
-        Filter results based on adaptive criteria.
+        Filter results based on adaptive criteria:
+        1. Always include min_chunks
+        2. Stop at max_chunks
+        3. Stop if below min_similarity threshold
+        4. Stop if score drops too much from previous (drop_off_threshold)
+        5. Stop if score is less than relative_threshold of top score
         
         Returns:
             Tuple of (filtered_results, metadata)
@@ -340,7 +347,9 @@ class AdaptiveRetriever:
             return [], {"reason": "no_results"}
         
         filtered = []
-        prev_score = results[0].score if results else 0
+        top_score = results[0].score if results else 0
+        prev_score = top_score
+        min_acceptable_score = top_score * self.relative_threshold
         
         for i, result in enumerate(results):
             # Always include minimum chunks
@@ -357,10 +366,15 @@ class AdaptiveRetriever:
             if result.score < self.min_similarity:
                 break
             
-            # Stop if large drop-off from previous
-            score_drop = prev_score - result.score
-            if score_drop > self.drop_off_threshold:
+            # Stop if score is too low relative to top score
+            if result.score < min_acceptable_score:
                 break
+            
+            # Stop if large drop-off from previous result
+            if prev_score > 0:
+                score_drop_pct = (prev_score - result.score) / prev_score
+                if score_drop_pct > self.drop_off_threshold:
+                    break
             
             filtered.append(result)
             prev_score = result.score
@@ -368,8 +382,9 @@ class AdaptiveRetriever:
         metadata = {
             "total_candidates": len(results),
             "filtered_count": len(filtered),
-            "top_score": results[0].score if results else 0,
+            "top_score": top_score,
             "bottom_score": filtered[-1].score if filtered else 0,
+            "min_acceptable": min_acceptable_score,
             "cutoff_reason": self._get_cutoff_reason(results, filtered),
         }
         

@@ -505,25 +505,29 @@ Summary:"""
         sources = []
         seen_chunks = set()
         
-        # Normalize scores for display
+        # Normalize scores for display - scale to meaningful percentages
         raw_scores = [c.get("score", 0) for c in chunks]
         max_score = max(raw_scores) if raw_scores else 1
         min_score = min(raw_scores) if raw_scores else 0
         score_range = max_score - min_score if max_score != min_score else 1
         
         for c in chunks:
-            chunk_text = c.get("text", "")[:1000]
+            chunk_text = c.get("text", "")
             
             if chunk_text in seen_chunks:
                 continue
             seen_chunks.add(chunk_text)
             
-            # Normalize score: top results get ~85-95%, lower results get ~50-70%
+            # Normalize score: scale relative position to 60-100% range
+            # Top result gets near 100%, lowest gets near 60%
             raw_score = c.get("score", 0)
             if score_range > 0 and max_score > 0:
-                normalized_score = 0.50 + (0.45 * (raw_score - min_score) / score_range)
+                relative_position = (raw_score - min_score) / score_range
+                # Scale: 60% base + up to 40% based on position
+                normalized_score = 0.60 + (0.40 * relative_position)
             else:
-                normalized_score = min(0.90, max(0.50, raw_score * 3))
+                # Single result or all same score - give high score
+                normalized_score = 0.95
             
             sources.append({
                 "title": c.get("title"),
@@ -531,8 +535,11 @@ Summary:"""
                 "transcript_id": c.get("transcript_id"),
                 "speakers": c.get("speakers", []),
                 "text_preview": chunk_text,
+                "text": chunk_text,  # Include both for frontend compatibility
                 "relevance_score": round(normalized_score, 3),
                 "search_source": c.get("search_source", "vector"),
+                "meeting_category": c.get("meeting_category"),
+                "category_confidence": c.get("category_confidence"),
             })
         
         return sources
@@ -549,6 +556,8 @@ Summary:"""
         tool_name: str,
         tool_args: Dict[str, Any],
         user_query: str,
+        user_id: Optional[str] = None,
+        db: Optional[AsyncSession] = None,
     ) -> AsyncIterator[str]:
         """
         Execute a tool and stream progress/results.
@@ -576,19 +585,21 @@ Summary:"""
                 service = InfographicService()
                 
                 # Map style string to enum
-                style_str = tool_args.get("style", "modern")
+                style_str = tool_args.get("style", "modern").lower()
                 try:
                     style = InfographicStyle(style_str)
                 except ValueError:
                     style = InfographicStyle.MODERN
                 
-                # Generate infographic (without DB persistence for now)
+                # Generate infographic with persistence for chat context
                 result = await service.generate(
                     request=tool_args.get("request", user_query),
                     topic=tool_args.get("topic"),
                     style=style,
                     doc_type=tool_args.get("doc_type"),
-                    persist=False,  # Don't persist to DB in chat context
+                    user_id=user_id,
+                    db=db,
+                    persist=True,  # Persist to DB and S3 for chat context
                 )
                 
                 elapsed_ms = round((time.time() - start_time) * 1000, 2)
@@ -606,9 +617,24 @@ Summary:"""
                         "status": "complete",
                         "data": {
                             "structured_data": result.get("structured_data"),
-                            "image": result.get("image"),
-                            "sources": result.get("sources", []),
+                            "image_url": result.get("image_url"),  # Use S3 URL for persistent storage
+                            "image": result.get("image"),  # Always include base64 as fallback
+                            "s3_key": result.get("s3_key"),  # Store S3 key for URL regeneration
+                            "sources": [
+                                {
+                                    "title": s.get("title"),
+                                    "date": s.get("date"),
+                                    "score": s.get("score"),
+                                    "text_preview": s.get("text_preview"),
+                                    "text": s.get("text_preview") or s.get("text"),
+                                    "relevance_score": s.get("relevance_score") or s.get("score"),
+                                    "meeting_category": s.get("meeting_category"),
+                                    "category_confidence": s.get("category_confidence"),
+                                }
+                                for s in result.get("sources", [])
+                            ],
                             "timing_ms": elapsed_ms,
+                            "infographic_id": result.get("id"),  # Include ID for reference
                         },
                     })
                     
@@ -722,6 +748,7 @@ Summary:"""
         conversation_history: Optional[List[Dict[str, str]]] = None,
         conversation_id: Optional[str] = None,
         session: Optional[AsyncSession] = None,
+        user_id: Optional[str] = None,
         doc_type: Optional[str] = None,
         document_ids: Optional[List[str]] = None,
     ) -> AsyncIterator[str]:
@@ -776,6 +803,8 @@ Summary:"""
                     tool_name=tool_decision.tool_name,
                     tool_args=tool_decision.tool_args,
                     user_query=query,
+                    user_id=user_id,
+                    db=session,
                 ):
                     yield event
                 
@@ -894,8 +923,11 @@ Summary:"""
                 "transcript_id": c.get("transcript_id"),
                 "speakers": c.get("speakers", []),
                 "text": chunk_text,
+                "text_preview": chunk_text,  # Include both for frontend compatibility
                 "relevance_score": round(normalized_score, 3),  # Normalized score for display
                 "raw_score": round(raw_score, 4),  # Keep raw score for debugging
+                "meeting_category": c.get("meeting_category"),
+                "category_confidence": c.get("category_confidence"),
             }
             sources.append(source)
             logger.debug(f"[STREAM] Source: title='{source['title']}', date='{source['date']}', "

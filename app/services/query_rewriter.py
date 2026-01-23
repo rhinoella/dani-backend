@@ -51,19 +51,43 @@ class QueryRewriter:
         r"^anything else\b",        
     ]
     
-    # Pronouns and references that need resolution
+    # Pronouns and references that need resolution - ONLY when they refer to previous context
+    # Note: "who", "what", "where" etc. are NOT pronouns that need resolution
     PRONOUN_PATTERNS = [
-        r"\b(it|its|it's)\b",       
-        r"\b(this|that|these|those)\b", 
+        r"\bit\b",                          # "it" - always a reference to something
+        r"\bits\b",                         # "its" - possessive reference
+        r"\bit's\b",                        # "it's" - contraction
+        r"\bthis\b(?!\s+(is|was|are|were)\b)",  # "this" but not "this is/was" at start
+        r"\bthat\b(?!\s+(is|was|are|were)\b)",  # "that" but not "that is/was"
+        r"\b(these|those)\b",   
         r"\b(they|them|their)\b",   
         r"\b(he|she|his|her)\b",    
         r"\bthe same\b",            
         r"\b(above|previous|earlier|mentioned)\b",  
-        r"\bthe (meeting|discussion|call|session|plan|document|report|presentation|project|proposal|email)\b",
+        r"\bthe (meeting|discussion|call|session|plan|document|report|presentation|project|proposal)\b",
     ]
     
-    # Short query threshold (likely needs context)
-    SHORT_QUERY_WORDS = 5
+    # Patterns that indicate a STANDALONE query (should NOT be rewritten)
+    STANDALONE_PATTERNS = [
+        r"^who (is|are|was|were)\b",         # "Who is X", "Who are Y" - direct question about entity
+        r"^what (is|are|was|were)\b",        # "What is X", "What are Y" - direct definition question
+        r"^where (is|are|was|were)\b",       # "Where is X" - direct location question
+        r"^when (is|are|was|were|did)\b",    # "When is X" - direct time question
+        r"^why (is|are|was|were|did|do)\b",  # "Why is X" - direct reason question
+        r"^how (is|are|was|were|do|does|did|can|could|would|should)\b",  # "How is X" - direct method question
+        r"^tell me about\b",                 # "Tell me about X" - direct topic request
+        r"^explain\b(?!\s+more)",            # "Explain X" but not "explain more"
+        r"^describe\b",                      # "Describe X" - direct description request
+        r"^summarize\b",                     # "Summarize X" - direct summary request
+        r"^list\b",                          # "List X" - direct list request
+        r"^give me\b",                       # "Give me X" - direct request
+        r"^show me\b",                       # "Show me X" - direct request
+        r"^find\b",                          # "Find X" - direct search request
+        r"^search\b",                        # "Search for X" - direct search request
+    ]
+    
+    # Short query threshold (likely needs context) - but only if it contains pronouns
+    SHORT_QUERY_WORDS = 3  # Reduced from 5 - only very short queries like "continue" or "go on"
     
     REWRITE_PROMPT_TEMPLATE = """You are a query rewriting assistant. Your job is to rewrite ambiguous follow-up questions to be self-contained by incorporating context from the conversation history.
 
@@ -73,17 +97,19 @@ CONVERSATION HISTORY:
 CURRENT QUERY: {query}
 
 INSTRUCTIONS:
-1. CRITICAL: Identify the main topic from the most recent assistant response and user question.
-2. If the query contains pronouns (it, that, this, they, etc.) or vague references like "talk more about it", replace them with the SPECIFIC TOPIC being discussed.
-3. If the query is short like "continue", "go on", "talk more", or "explain more", rewrite it to explicitly ask for more information about the PREVIOUS TOPIC.
-4. Keep the rewritten query concise and natural-sounding.
-5. Do NOT answer the question - only rewrite it.
-6. Return ONLY the rewritten query, nothing else.
+1. CRITICAL: First determine if this is a NEW TOPIC or a FOLLOW-UP question.
+2. If the query asks about a SPECIFIC NEW entity (person, company, concept) that was NOT discussed before, return the query UNCHANGED.
+3. ONLY rewrite if the query contains pronouns (it, that, this, they) or vague references that clearly refer to the previous conversation.
+4. If the query is short like "continue", "go on", "talk more", rewrite it to explicitly ask for more information about the PREVIOUS TOPIC.
+5. Keep the rewritten query concise and natural-sounding.
+6. Do NOT answer the question - only rewrite it.
+7. Return ONLY the rewritten query, nothing else.
 
 EXAMPLES:
-- History: User asked about "hacking marketing using government mandates", Query: "talk more about it" → "Explain more about hacking marketing using government mandates"
-- History: User asked about "Q1 roadmap", Query: "who is leading it?" → "Who is leading the Q1 roadmap?"
-- History: Discussion about "SME App Store strategy", Query: "continue" → "Continue explaining the SME App Store strategy"
+- History about "Advancly", Query: "Who are splashers" → "Who are splashers" (NEW TOPIC - unchanged)
+- History about "mobile app", Query: "who is leading it?" → "Who is leading the mobile app?" (FOLLOW-UP - has "it")
+- History about "Q1 roadmap", Query: "continue" → "Continue explaining the Q1 roadmap" (VAGUE - needs context)
+- History about "budget", Query: "What is Greenhouse?" → "What is Greenhouse?" (NEW TOPIC - unchanged)
 
 REWRITTEN QUERY:"""
 
@@ -99,6 +125,37 @@ REWRITTEN QUERY:"""
         # Compile patterns for efficiency
         self._followup_regex = [re.compile(p, re.IGNORECASE) for p in self.FOLLOWUP_PATTERNS]
         self._pronoun_regex = [re.compile(p, re.IGNORECASE) for p in self.PRONOUN_PATTERNS]
+        self._standalone_regex = [re.compile(p, re.IGNORECASE) for p in self.STANDALONE_PATTERNS]
+    
+    def _is_standalone_query(self, query: str) -> bool:
+        """
+        Check if query is a standalone question that doesn't need context.
+        
+        Args:
+            query: The user's query
+            
+        Returns:
+            True if query appears to be standalone (new topic)
+        """
+        query_lower = query.lower().strip()
+        
+        # Check for standalone patterns
+        for pattern in self._standalone_regex:
+            if pattern.search(query_lower):
+                logger.debug(f"Query matches standalone pattern: {query}")
+                return True
+        
+        # Check if query contains a proper noun or specific entity (capitalized word not at start)
+        words = query.split()
+        if len(words) >= 2:
+            # Check words after the first for capitalization (potential proper nouns)
+            for word in words[1:]:
+                # Skip common words that might be capitalized
+                if word[0].isupper() and word.lower() not in ['i', 'the', 'a', 'an', 'is', 'are', 'was', 'were']:
+                    logger.debug(f"Query contains potential proper noun '{word}': {query}")
+                    return True
+        
+        return False
     
     def needs_rewrite(self, query: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> bool:
         """
@@ -117,23 +174,43 @@ REWRITTEN QUERY:"""
         
         query_lower = query.lower().strip()
         
-        # Check for follow-up patterns
-        for pattern in self._followup_regex:
-            if pattern.search(query_lower):
-                logger.debug(f"Query matches follow-up pattern: {query}")
-                return True
-        
-        # Check for pronouns/references
+        # FIRST: Check for pronouns/references that clearly need resolution
+        # This takes priority because "Who is leading it?" should be rewritten
+        # even though it looks like a standalone question
         for pattern in self._pronoun_regex:
             if pattern.search(query_lower):
                 logger.debug(f"Query contains pronouns/references: {query}")
                 return True
         
-        # Check if query is very short (likely incomplete)
+        # SECOND: Check for follow-up patterns (e.g., "what about", "continue", "go on")
+        for pattern in self._followup_regex:
+            if pattern.search(query_lower):
+                logger.debug(f"Query matches follow-up pattern: {query}")
+                return True
+        
+        # THIRD: Check if it's a standalone query (new topic) - these should NOT be rewritten
+        if self._is_standalone_query(query):
+            logger.debug(f"Query is standalone, skipping rewrite: {query}")
+            return False
+        
+        # Only rewrite VERY short queries (1-3 words) that are vague commands
+        # Examples: "continue", "go on", "more", "explain", "elaborate"
         word_count = len(query_lower.split())
         if word_count <= self.SHORT_QUERY_WORDS:
-            logger.debug(f"Query is short ({word_count} words): {query}")
-            return True
+            # Skip single question words like "What?" "How?" "Why?"
+            single_question_words = {"what", "who", "where", "when", "why", "how", "which"}
+            clean_query = query_lower.rstrip("?!.")
+            if clean_query in single_question_words:
+                logger.debug(f"Query is just a question word, skipping rewrite: {query}")
+                return False
+            
+            # But only if it doesn't contain a specific entity (proper noun)
+            # "Who are splashers" (3 words) should NOT be rewritten
+            # "go on" (2 words) SHOULD be rewritten
+            has_entity = any(word[0].isupper() for word in query.split()[1:] if len(word) > 1)
+            if not has_entity:
+                logger.debug(f"Query is short ({word_count} words) without entity: {query}")
+                return True
         
         return False
     

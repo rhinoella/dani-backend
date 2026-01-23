@@ -86,7 +86,7 @@ class Infographic(Base):
     
     # Style and dimensions
     style: Mapped[InfographicStyle] = mapped_column(
-        SQLEnum(InfographicStyle, name="infographic_style"),
+        SQLEnum(InfographicStyle, name="infographic_style", values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         default=InfographicStyle.MODERN,
         comment="Visual style of the infographic",
@@ -199,7 +199,7 @@ class Infographic(Base):
     
     # Status
     status: Mapped[InfographicStatus] = mapped_column(
-        SQLEnum(InfographicStatus, name="infographic_status"),
+        SQLEnum(InfographicStatus, name="infographic_status", values_callable=lambda x: [e.value for e in x]),
         nullable=False,
         default=InfographicStatus.PENDING,
         index=True,

@@ -23,8 +23,11 @@ class SourceReference(BaseModel):
     transcript_id: Optional[str] = None
     speakers: Optional[List[str]] = []
     text: Optional[str] = None
+    text_preview: Optional[str] = None  # Alias for text, for frontend compatibility
     relevance_score: Optional[float] = None
     raw_score: Optional[float] = None
+    meeting_category: Optional[str] = None  # Inferred meeting category
+    category_confidence: Optional[float] = None  # Category confidence score
     
     # Document-based sources (for uploaded documents)
     document_id: Optional[str] = None

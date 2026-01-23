@@ -626,6 +626,49 @@ async def download_infographic(
     return RedirectResponse(url=presigned_url)
 
 
+class RegenerateUrlRequest(BaseModel):
+    """Request to regenerate a presigned URL from an S3 key."""
+    s3_key: str = Field(..., description="The S3 key for the image")
+    expiry_seconds: int = Field(3600 * 24, ge=60, le=604800, description="URL expiry in seconds (default 24h, max 7 days)")
+
+
+class RegenerateUrlResponse(BaseModel):
+    """Response containing the new presigned URL."""
+    url: str
+    expires_in_seconds: int
+
+
+@router.post("/regenerate-url", response_model=RegenerateUrlResponse)
+async def regenerate_presigned_url(
+    req: RegenerateUrlRequest,
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """
+    Regenerate a presigned URL from an S3 key.
+    
+    This is useful when a stored presigned URL has expired but the S3 key
+    is still available in the message metadata.
+    """
+    from app.services.storage_service import StorageService
+    
+    try:
+        storage = StorageService()
+        url = await storage.get_presigned_url(
+            key=req.s3_key,
+            expiry_seconds=req.expiry_seconds,
+        )
+        return RegenerateUrlResponse(
+            url=url,
+            expires_in_seconds=req.expiry_seconds,
+        )
+    except Exception as e:
+        logger.error(f"Failed to regenerate presigned URL: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to regenerate URL: {str(e)}"
+        )
+
+
 @router.delete("/{infographic_id}")
 async def delete_infographic(
     infographic_id: str,

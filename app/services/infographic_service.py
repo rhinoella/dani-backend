@@ -31,6 +31,7 @@ from app.services.storage_service import StorageService
 from app.services.infographic_context import InfographicContextBuilder
 from app.schemas.retrieval import MetadataFilter
 from app.mcp.client import extract_all_content, extract_text
+from app.utils.query_processor import normalize_relevance_score, get_relevance_label
 from app.database.models.infographic import (
     Infographic as InfographicModel,
     InfographicStyle,
@@ -40,12 +41,12 @@ from app.core.config import settings
 
 # Image generation dependencies
 try:
-    import google.generativeai as genai
+    from google import genai as google_genai
     from PIL import Image, ImageDraw, ImageFont
     IMAGE_DEPS_AVAILABLE = True
 except ImportError:
     IMAGE_DEPS_AVAILABLE = False
-    logger.warning("Image generation dependencies not available - PIL and google-generativeai required")
+    logger.warning("Image generation dependencies not available - PIL and google-genai required")
 from app.database.models.infographic import (
     Infographic as InfographicModel,
     InfographicStyle,
@@ -211,7 +212,14 @@ class InfographicService:
                 
                 # Step 4: Generate visual infographic via MCP
                 image_start = time.time()
-                image_result = await self._generate_image(structured_data, style, width, height)
+                image_result = await self._generate_image(
+                    structured_data, 
+                    style, 
+                    width, 
+                    height,
+                    user_query=request,
+                    context_summary=context,
+                )
                 image_ms = round((time.time() - image_start) * 1000, 2)
 
                 if "error" in image_result:
@@ -295,13 +303,18 @@ class InfographicService:
                 title = chunk.get("title") or "Untitled"
                 text = chunk.get("text", "")
                 date = chunk.get("date")
+                raw_score = chunk.get("score", 0)
                 
                 context_parts.append(f"From '{title}' ({date or 'undated'}):\n{text}")
                 sources.append({
                     "title": title,
                     "date": date,
                     "text_preview": text,
-                    "score": chunk.get("score", 0),
+                    "score": raw_score,
+                    "relevance_score": normalize_relevance_score(raw_score),  # Normalized 0-100%
+                    "relevance_label": get_relevance_label(raw_score),  # Human-readable label
+                    "meeting_category": chunk.get("meeting_category"),
+                    "category_confidence": chunk.get("category_confidence"),
                 })
 
             context = "\n\n---\n\n".join(context_parts)
@@ -321,7 +334,14 @@ class InfographicService:
 
         # Step 4: Generate visual infographic via MCP
         image_start = time.time()
-        image_result = await self._generate_image(structured_data, style, width, height)
+        image_result = await self._generate_image(
+            structured_data, 
+            style, 
+            width, 
+            height,
+            user_query=request,
+            context_summary=context,
+        )
         image_ms = round((time.time() - image_start) * 1000, 2)
 
         if "error" in image_result:
@@ -410,7 +430,7 @@ class InfographicService:
                 try:
                     presigned_url = await self.storage.get_presigned_url(
                         s3_key,
-                        expiry_seconds=3600 * 24 * 365,  # 1 year
+                        expiry=3600 * 24 * 365,  # 1 year
                     )
                     logger.info(f"[INFOGRAPHIC] Generated presigned URL for {s3_key}")
                 except Exception as e:
@@ -530,11 +550,28 @@ class InfographicService:
         style: InfographicStyle,
         width: int,
         height: int,
+        user_query: Optional[str] = None,
+        context_summary: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Generate visual infographic image via direct Gemini API or MCP fallback."""
+        """
+        Generate visual infographic image via direct Gemini API or MCP fallback.
         
-        # Build the image generation prompt
-        prompt = self._build_image_prompt(structured_data, style)
+        Args:
+            structured_data: Extracted headline, stats, key_points etc.
+            style: Visual style for the infographic
+            width: Image width
+            height: Image height
+            user_query: Original user request for context
+            context_summary: Summary of retrieved chunks for richer prompt
+        """
+        
+        # Build the image generation prompt with full context
+        prompt = self._build_image_prompt(
+            structured_data, 
+            style, 
+            user_query=user_query, 
+            context_summary=context_summary
+        )
         
         try:
             # Try direct Gemini API first (bypasses broken nano-banana MCP)
@@ -626,83 +663,57 @@ class InfographicService:
             logger.warning("Image generation dependencies not available")
             return self._generate_placeholder_image(prompt, width, height)
 
-        # Try Imagen API first if available
+        # Try Gemini image generation models
         api_key = settings.GEMINI_API_KEY
         if not api_key:
             logger.warning("GEMINI_API_KEY not found - will use PIL fallback for image generation")
             return self._generate_placeholder_image(prompt, width, height)
 
+        # Keep prompt simple - don't add more text, it slows generation
+        enhanced_prompt = prompt
+
+        # Models to try in order of preference
+        image_models = [
+            "gemini-2.5-flash-image",      # Nano Banana - fast, good quality
+            "gemini-3-pro-image-preview",  # Nano Banana Pro - higher quality
+        ]
+        
         try:
-            genai.configure(api_key=api_key)
+            client = google_genai.Client(api_key=api_key)
             
-            # Use Imagen 3.0 for image generation (gemini-2.0-flash is text-only)
-            imagen_model = genai.ImageGenerationModel("imagen-3.0-generate-002")
-
-            # Create a detailed prompt for better results
-            enhanced_prompt = f"""Professional business infographic:
-{prompt}
-
-Style: Clean, modern, professional business presentation with clear data visualization and high contrast for readability."""
-
-            # Generate the image using Imagen
-            logger.info("[INFOGRAPHIC] Generating image with Imagen 3.0...")
-            response = imagen_model.generate_images(
-                prompt=enhanced_prompt,
-                number_of_images=1,
-                aspect_ratio="1:1" if width == height else ("16:9" if width > height else "9:16"),
-                safety_filter_level="block_only_high",
-                person_generation="allow_adult",
-            )
-
-            if response and response.images:
-                # Get the first generated image
-                generated_image = response.images[0]
-                
-                # Convert to bytes
-                if hasattr(generated_image, '_pil_image') and generated_image._pil_image:
-                    # If PIL image is available, save to bytes
-                    buffer = io.BytesIO()
-                    generated_image._pil_image.save(buffer, format='PNG')
-                    image_data = buffer.getvalue()
-                    logger.info("[INFOGRAPHIC] Image generated successfully with Imagen 3.0")
-                    return image_data
-                elif hasattr(generated_image, 'data') and generated_image.data:
-                    # Raw bytes data
-                    logger.info("[INFOGRAPHIC] Image generated successfully with Imagen 3.0")
-                    return generated_image.data
-
-            logger.warning("Imagen API did not return image data")
-
-        except Exception as e:
-            logger.warning(f"Imagen API failed: {e}")
-            
-            # Try fallback with experimental Gemini image generation model
-            try:
-                logger.info("[INFOGRAPHIC] Trying experimental Gemini image generation model...")
-                model = genai.GenerativeModel("gemini-2.0-flash-exp-image-generation")
-                
-                response = model.generate_content(
-                    enhanced_prompt,
-                    generation_config=genai.types.GenerationConfig(
-                        temperature=0.7,
-                        response_modalities=["image"],
+            for model_name in image_models:
+                try:
+                    logger.info(f"[INFOGRAPHIC] Generating image with {model_name}...")
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=enhanced_prompt,
                     )
-                )
-                
-                if response and response.candidates:
-                    candidate = response.candidates[0]
-                    if candidate.content and candidate.content.parts:
-                        for part in candidate.content.parts:
-                            if hasattr(part, 'inline_data') and part.inline_data:
-                                image_data = base64.b64decode(part.inline_data.data)
-                                logger.info("[INFOGRAPHIC] Image generated with experimental model")
-                                return image_data
-                                
-            except Exception as exp_e:
-                logger.warning(f"Experimental Gemini model also failed: {exp_e}")
+                    
+                    if response and response.candidates:
+                        for candidate in response.candidates:
+                            if candidate.content and candidate.content.parts:
+                                for part in candidate.content.parts:
+                                    if hasattr(part, 'inline_data') and part.inline_data:
+                                        # Get image data
+                                        data = part.inline_data.data
+                                        if isinstance(data, str):
+                                            data = base64.b64decode(data)
+                                        logger.info(f"[INFOGRAPHIC] Image generated successfully with {model_name} ({len(data)} bytes)")
+                                        return data
+                    
+                    logger.warning(f"[INFOGRAPHIC] {model_name} did not return image data")
+                    
+                except Exception as model_e:
+                    logger.warning(f"[INFOGRAPHIC] {model_name} failed: {model_e}")
+                    continue
+            
+            logger.warning("[INFOGRAPHIC] All Gemini image models failed")
+            
+        except Exception as e:
+            logger.error(f"[INFOGRAPHIC] Gemini client initialization failed: {e}")
 
         # Fallback to PIL-based image generation
-        logger.info("Using PIL fallback for image generation")
+        logger.info("[INFOGRAPHIC] Using PIL fallback for image generation")
         return self._generate_placeholder_image(prompt, width, height)
 
     def _generate_placeholder_image(self, prompt: str, width: int = 1024, height: int = 768) -> Optional[bytes]:
@@ -873,52 +884,50 @@ Style: Clean, modern, professional business presentation with clear data visuali
     def _build_image_prompt(
         self, 
         structured_data: Dict[str, Any], 
-        style: InfographicStyle
+        style: InfographicStyle,
+        user_query: Optional[str] = None,
+        context_summary: Optional[str] = None,
     ) -> str:
-        """Build a detailed prompt for image generation."""
+        """
+        Build a SIMPLIFIED prompt for image generation.
+        
+        IMPORTANT: Gemini image models work best with SHORT, focused prompts.
+        Long prompts with too much text cause slow generation and poor results.
+        
+        Args:
+            structured_data: Extracted headline, stats, key_points etc.
+            style: Visual style for the infographic
+            user_query: Original user request/query for context (not used - too verbose)
+            context_summary: Summary of retrieved chunks (not used - too verbose)
+        """
         
         headline = structured_data.get("headline", "Infographic")
-        subtitle = structured_data.get("subtitle", "")
         stats = structured_data.get("stats", [])
-        key_points = structured_data.get("key_points", [])
         
-        # Format stats for the prompt
-        stats_text = "\n".join([
-            f"- {s.get('icon', '📊')} {s.get('value')}: {s.get('label')}"
-            for s in stats[:6]
+        # Format only TOP 4 stats as simple text
+        stats_text = ", ".join([
+            f"{s.get('value')} {s.get('label')}"
+            for s in stats[:4]
         ])
         
-        # Format key points
-        points_text = "\n".join([f"- {p}" for p in key_points[:5]])
+        # Get style-specific visual instructions (shortened)
+        style_short = {
+            InfographicStyle.MODERN: "modern, clean, gradient blue",
+            InfographicStyle.CORPORATE: "corporate, navy and gray, professional",
+            InfographicStyle.MINIMAL: "minimalist, white space, simple",
+            InfographicStyle.VIBRANT: "colorful, bold, energetic",
+            InfographicStyle.DARK: "dark theme, neon accents, tech style",
+        }
+        style_desc = style_short.get(style, "modern professional")
         
-        # Get style-specific visual instructions
-        style_instructions = STYLE_PROMPTS.get(style, STYLE_PROMPTS[InfographicStyle.MODERN])
-        
-        prompt = f"""Create a professional infographic image with the following content:
+        # SIMPLIFIED PROMPT - much shorter for faster generation
+        prompt = f"""Create a {style_desc} infographic titled "{headline}".
 
-TITLE: {headline}
-{f'SUBTITLE: {subtitle}' if subtitle else ''}
+Show these stats visually with icons and charts: {stats_text}
 
-KEY STATISTICS:
-{stats_text}
+Style: Clean data visualization, no photos of people, high contrast text."""
 
-{'KEY POINTS:' if points_text else ''}
-{points_text}
-
-VISUAL STYLE: {style_instructions}
-
-DESIGN REQUIREMENTS:
-- Clean, readable typography
-- Professional infographic layout
-- Visual hierarchy with title prominent
-- Stats displayed with icons or visual elements
-- Balanced composition
-- High quality, presentation-ready
-- Text should be clearly legible
-- Use visual elements like charts, icons, or graphics where appropriate
-
-Generate a complete infographic image, NOT a photograph or illustration of people."""
-
+        logger.info(f"[INFOGRAPHIC] Image prompt length: {len(prompt)} chars")
         return prompt
     
     async def _save_to_database(
@@ -1134,7 +1143,7 @@ Generate a complete infographic image, NOT a photograph or illustration of peopl
         try:
             return await self.storage.get_presigned_url(
                 infographic.s3_key,
-                expiry_seconds=expiry_seconds,
+                expiry=expiry_seconds,
             )
         except Exception as e:
             logger.error(f"[INFOGRAPHIC] Failed to generate presigned URL: {e}")

@@ -655,7 +655,7 @@ async def regenerate_presigned_url(
         storage = StorageService()
         url = await storage.get_presigned_url(
             key=req.s3_key,
-            expiry_seconds=req.expiry_seconds,
+            expiry=req.expiry_seconds,
         )
         return RegenerateUrlResponse(
             url=url,

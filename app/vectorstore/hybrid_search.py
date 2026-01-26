@@ -311,6 +311,10 @@ class AdaptiveRetriever:
     With proper embedding prefixes (search_query/search_document), nomic-embed-text
     produces similarity scores in the 0.3-0.8 range for relevant content.
     Now reads thresholds from settings for configurability.
+    
+    Quality gates:
+    1. If top score is below low_relevance_threshold, return empty
+    2. If scores are too tightly clustered (low gap), likely off-topic
     """
     
     def __init__(
@@ -320,6 +324,8 @@ class AdaptiveRetriever:
         min_chunks: Optional[int] = None,
         drop_off_threshold: float = 0.15,  # 15% drop-off threshold - stop when quality drops
         relative_threshold: float = 0.50,  # Results must be at least 50% of top score
+        low_relevance_threshold: float = 0.15,  # If top score below this, query is likely off-topic (lowered from 0.20)
+        min_score_gap: float = 0.03,  # Minimum gap between top and 5th result (as ratio of top score)
     ):
         # Use settings if not explicitly provided
         self.min_similarity = min_similarity if min_similarity is not None else settings.ADAPTIVE_MIN_SIMILARITY
@@ -327,6 +333,8 @@ class AdaptiveRetriever:
         self.min_chunks = min_chunks if min_chunks is not None else settings.ADAPTIVE_MIN_CHUNKS
         self.drop_off_threshold = drop_off_threshold
         self.relative_threshold = relative_threshold
+        self.low_relevance_threshold = low_relevance_threshold
+        self.min_score_gap = min_score_gap
     
     def filter_results(
         self,
@@ -334,7 +342,9 @@ class AdaptiveRetriever:
     ) -> Tuple[List[SearchResult], Dict[str, Any]]:
         """
         Filter results based on adaptive criteria:
-        1. Always include min_chunks
+        0. Quality gate 1: If top score is too low, return empty (off-topic query)
+        0b. Quality gate 2: If scores are too clustered, return empty (no clear winners)
+        1. Always include min_chunks (unless quality gate triggered)
         2. Stop at max_chunks
         3. Stop if below min_similarity threshold
         4. Stop if score drops too much from previous (drop_off_threshold)
@@ -346,8 +356,42 @@ class AdaptiveRetriever:
         if not results:
             return [], {"reason": "no_results"}
         
-        filtered = []
         top_score = results[0].score if results else 0
+        
+        # Quality gate 1: DISABLED - reranking makes raw score thresholds unreliable
+        # If the best match is still poor, the query is off-topic
+        # if top_score < self.low_relevance_threshold:
+        #     logger.info(f"Quality gate 1 triggered: top_score {top_score:.3f} < threshold {self.low_relevance_threshold}")
+        #     return [], {
+        #         "reason": "low_relevance",
+        #         "total_candidates": len(results),
+        #         "filtered_count": 0,
+        #         "top_score": top_score,
+        #         "bottom_score": 0,
+        #         "min_acceptable": 0,
+        #         "cutoff_reason": "quality_gate_low_relevance",
+        #     }
+        
+        # Quality gate 2: Check if scores are too tightly clustered
+        # If top 5 results all have very similar scores, nothing stands out as truly relevant
+        # DISABLED for now - reranking transforms scores making gap detection unreliable
+        # if len(results) >= 5:
+        #     fifth_score = results[4].score
+        #     score_gap_ratio = (top_score - fifth_score) / top_score if top_score > 0 else 0
+        #     if score_gap_ratio < self.min_score_gap:
+        #         logger.info(f"Quality gate 2 triggered: score_gap_ratio {score_gap_ratio:.4f} < min_score_gap {self.min_score_gap}")
+        #         return [], {
+        #             "reason": "no_clear_winners",
+        #             "total_candidates": len(results),
+        #             "filtered_count": 0,
+        #             "top_score": top_score,
+        #             "bottom_score": 0,
+        #             "min_acceptable": 0,
+        #             "score_gap_ratio": score_gap_ratio,
+        #             "cutoff_reason": "quality_gate_score_clustering",
+        #         }
+        
+        filtered = []
         prev_score = top_score
         min_acceptable_score = top_score * self.relative_threshold
         

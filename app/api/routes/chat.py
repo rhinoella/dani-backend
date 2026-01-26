@@ -307,6 +307,16 @@ async def chat(
                             else:
                                 content_to_store = "Tool execution complete."
 
+                        # For infographic, exclude base64 image from storage (too large ~1MB)
+                        # Keep s3_key and image_url for regeneration
+                        tool_result_to_store = tool_result
+                        if tool_name == "infographic_generator" and tool_result:
+                            tool_result_to_store = {
+                                k: v for k, v in tool_result.items() 
+                                if k != "image"  # Exclude large base64 data
+                            }
+                            logger.info(f"[CHAT] Storing infographic without base64 image. s3_key={tool_result_to_store.get('s3_key')}")
+
                         assistant_msg = await conv_service.add_message(
                             conversation_id=conversation_id,
                             user_id=current_user.id,
@@ -316,7 +326,7 @@ async def chat(
                             metadata={
                                 "timing": timing_data,
                                 "chunks_used": len(sources),
-                                "tool_result": tool_result,
+                                "tool_result": tool_result_to_store,
                                 "tool_name": tool_name,
                             }
                         )

@@ -18,7 +18,7 @@ from app.vectorstore.hybrid_search import (
     ReRanker,
     CrossEncoderReRanker,
 )
-from app.utils.query_processor import QueryProcessor, ConfidenceScorer
+from app.utils.query_processor import QueryProcessor, ConfidenceScorer, normalize_relevance_score, get_relevance_label
 from app.utils.meeting_category import matches_meeting_category, infer_meeting_category
 
 logger = logging.getLogger(__name__)
@@ -383,8 +383,14 @@ class RetrievalService:
         
         # Apply adaptive retrieval if enabled
         if use_adaptive and results:
+            top_score = results[0].score if results else 0.0
+            logger.info(f"Adaptive retrieval input: {len(results)} results, top_score={top_score:.4f}")
+            if len(results) >= 5:
+                fifth = results[4].score
+                gap = (results[0].score - fifth) / results[0].score if results[0].score > 0 else 0
+                logger.info(f"Score gap ratio (top to 5th): {gap:.4f}")
             results, retrieval_meta = self.adaptive_retriever.filter_results(results)
-            logger.debug(f"Adaptive retrieval: {retrieval_meta}")
+            logger.info(f"Adaptive retrieval output: {retrieval_meta}")
         
         # Apply meeting category filter if specified (runtime inference from title)
         category_filter_start = time.time()
@@ -423,6 +429,8 @@ class RetrievalService:
             
             output.append({
                 "score": r.score,
+                "relevance_score": normalize_relevance_score(r.score),  # Normalized 0-100%
+                "relevance_label": get_relevance_label(r.score),  # Human-readable label
                 "text": r.text,
                 "title": title,
                 "date": r.payload.get("date"),

@@ -5,6 +5,7 @@ Provides:
 - Query compression/expansion
 - Query intent detection
 - Confidence scoring
+- Score normalization for display
 """
 
 from __future__ import annotations
@@ -15,6 +16,66 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+# Score normalization constants
+# nomic-embed-text with proper prefixes produces scores in 0.10-0.40 range
+SCORE_MIN_EXPECTED = 0.10  # Scores below this are very poor
+SCORE_MAX_EXPECTED = 0.45  # Scores above this are excellent (rare)
+
+
+def normalize_relevance_score(raw_score: float) -> float:
+    """
+    Normalize raw similarity scores to a 0-100 percentage scale.
+    
+    nomic-embed-text produces cosine similarity scores in a compressed range:
+    - 0.10-0.15: Low relevance
+    - 0.15-0.25: Medium relevance  
+    - 0.25-0.35: Good relevance
+    - 0.35+: Excellent relevance
+    
+    This function transforms these to intuitive percentages:
+    - 0.10 → 0%
+    - 0.20 → 29%
+    - 0.30 → 57%
+    - 0.40 → 86%
+    - 0.45+ → 100%
+    
+    Args:
+        raw_score: Raw cosine similarity score (typically 0.10-0.45)
+        
+    Returns:
+        Normalized score as percentage (0-100)
+    """
+    if raw_score <= SCORE_MIN_EXPECTED:
+        return 0.0
+    if raw_score >= SCORE_MAX_EXPECTED:
+        return 100.0
+    
+    # Linear interpolation between min and max
+    normalized = (raw_score - SCORE_MIN_EXPECTED) / (SCORE_MAX_EXPECTED - SCORE_MIN_EXPECTED)
+    return round(normalized * 100, 1)
+
+
+def get_relevance_label(raw_score: float) -> str:
+    """
+    Get human-readable relevance label from raw score.
+    
+    Args:
+        raw_score: Raw cosine similarity score
+        
+    Returns:
+        Label: "Excellent", "Good", "Medium", "Low", or "Uncertain"
+    """
+    if raw_score >= 0.35:
+        return "Excellent"
+    if raw_score >= 0.25:
+        return "Good"
+    if raw_score >= 0.18:
+        return "Medium"
+    if raw_score >= 0.12:
+        return "Low"
+    return "Uncertain"
 
 
 @dataclass

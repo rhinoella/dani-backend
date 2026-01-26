@@ -20,7 +20,7 @@ from app.llm.output_validator import OutputValidator
 from app.persona.templates import validate_output_format
 from app.cache.semantic_cache import ResponseCache
 from app.cache.conversation_cache import ConversationCache
-from app.utils.query_processor import ConfidenceScorer
+from app.utils.query_processor import ConfidenceScorer, normalize_relevance_score, get_relevance_label
 from app.schemas.retrieval import MetadataFilter
 
 logger = logging.getLogger(__name__)
@@ -505,12 +505,6 @@ Summary:"""
         sources = []
         seen_chunks = set()
         
-        # Normalize scores for display - scale to meaningful percentages
-        raw_scores = [c.get("score", 0) for c in chunks]
-        max_score = max(raw_scores) if raw_scores else 1
-        min_score = min(raw_scores) if raw_scores else 0
-        score_range = max_score - min_score if max_score != min_score else 1
-        
         for c in chunks:
             chunk_text = c.get("text", "")
             
@@ -518,16 +512,7 @@ Summary:"""
                 continue
             seen_chunks.add(chunk_text)
             
-            # Normalize score: scale relative position to 60-100% range
-            # Top result gets near 100%, lowest gets near 60%
             raw_score = c.get("score", 0)
-            if score_range > 0 and max_score > 0:
-                relative_position = (raw_score - min_score) / score_range
-                # Scale: 60% base + up to 40% based on position
-                normalized_score = 0.60 + (0.40 * relative_position)
-            else:
-                # Single result or all same score - give high score
-                normalized_score = 0.95
             
             sources.append({
                 "title": c.get("title"),
@@ -536,7 +521,9 @@ Summary:"""
                 "speakers": c.get("speakers", []),
                 "text_preview": chunk_text,
                 "text": chunk_text,  # Include both for frontend compatibility
-                "relevance_score": round(normalized_score, 3),
+                "relevance_score": normalize_relevance_score(raw_score),  # Normalized 0-100%
+                "relevance_label": get_relevance_label(raw_score),  # Human-readable label
+                "raw_score": round(raw_score, 4),  # Keep raw score for debugging
                 "search_source": c.get("search_source", "vector"),
                 "meeting_category": c.get("meeting_category"),
                 "category_confidence": c.get("category_confidence"),
@@ -627,7 +614,8 @@ Summary:"""
                                     "score": s.get("score"),
                                     "text_preview": s.get("text_preview"),
                                     "text": s.get("text_preview") or s.get("text"),
-                                    "relevance_score": s.get("relevance_score") or s.get("score"),
+                                    "relevance_score": s.get("relevance_score") or normalize_relevance_score(s.get("score", 0)),
+                                    "relevance_label": s.get("relevance_label") or get_relevance_label(s.get("score", 0)),
                                     "meeting_category": s.get("meeting_category"),
                                     "category_confidence": s.get("category_confidence"),
                                 }
@@ -924,7 +912,8 @@ Summary:"""
                 "speakers": c.get("speakers", []),
                 "text": chunk_text,
                 "text_preview": chunk_text,  # Include both for frontend compatibility
-                "relevance_score": round(normalized_score, 3),  # Normalized score for display
+                "relevance_score": normalize_relevance_score(raw_score),  # Normalized 0-100%
+                "relevance_label": get_relevance_label(raw_score),  # Human-readable label
                 "raw_score": round(raw_score, 4),  # Keep raw score for debugging
                 "meeting_category": c.get("meeting_category"),
                 "category_confidence": c.get("category_confidence"),

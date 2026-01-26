@@ -80,8 +80,8 @@ class Settings(BaseSettings):
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     RATE_LIMIT_ENABLED: bool = True
-    RATE_LIMIT_PER_MINUTE: int = 50   # Increased from 20 for more requests
-    RATE_LIMIT_PER_DAY: int = 1000    # Increased from 500 for more daily usage
+    RATE_LIMIT_PER_MINUTE: int = 200   # Increased for development/debugging
+    RATE_LIMIT_PER_DAY: int = 5000    # Increased for development/debugging
     
     MAX_CONVERSATIONS_PER_USER: int = 500   # Increased from 100 for more conversations
     MAX_MESSAGES_PER_CONVERSATION: int = 500  # Increased from 200 for longer conversations
@@ -142,6 +142,8 @@ class Settings(BaseSettings):
     
     LLM_WARMUP_ENABLED: bool = True
     TIMING_DETAILED: bool = True
+    
+    BACKGROUND_INGESTION_ENABLED: bool = False  # Set to True to enable auto-sync on startup
     
     AWS_ACCESS_KEY_ID: str = ""
     AWS_SECRET_ACCESS_KEY: str = ""

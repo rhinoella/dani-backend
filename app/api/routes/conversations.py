@@ -207,6 +207,23 @@ async def get_conversation_with_messages(
     
     logger.info(f"[CONVERSATIONS] Found conversation: id={conversation.id}, title={conversation.title}, messages={len(messages)}")
     
+    # Build message responses with debug logging for tool_result
+    message_responses = []
+    for m in messages:
+        md = dict(m.metadata_) if m.metadata_ else None
+        if md and md.get('tool_result'):
+            logger.info(f"[CONVERSATIONS] Message {m.id} has tool_result with s3_key={md.get('tool_result', {}).get('s3_key')}")
+        message_responses.append(MessageResponse(
+            id=str(m.id),
+            conversation_id=str(m.conversation_id),
+            role=m.role,
+            content=m.content,
+            sources=m.sources,
+            confidence_score=m.confidence_score,
+            metadata=md,
+            created_at=m.created_at
+        ))
+    
     return ConversationWithMessages(
         id=str(conversation.id),
         user_id=str(conversation.user_id),
@@ -216,19 +233,7 @@ async def get_conversation_with_messages(
         metadata=dict(conversation.metadata_) if conversation.metadata_ else None,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
-        messages=[
-            MessageResponse(
-                id=str(m.id),
-                conversation_id=str(m.conversation_id),
-                role=m.role,
-                content=m.content,
-                sources=m.sources,
-                confidence_score=m.confidence_score,
-                metadata=dict(m.metadata_) if m.metadata_ else None,
-                created_at=m.created_at
-            )
-            for m in messages
-        ]
+        messages=message_responses
     )
 
 

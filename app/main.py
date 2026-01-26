@@ -64,8 +64,11 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"MCP initialization failed: {e}")
     
-    # Start background ingestion (non-blocking)
-    await background_ingestion.start()
+    # Start background ingestion (non-blocking) - only if enabled
+    if settings.BACKGROUND_INGESTION_ENABLED:
+        await background_ingestion.start()
+    else:
+        logger.info("⏸️ Background ingestion disabled (set BACKGROUND_INGESTION_ENABLED=true to enable)")
     
     # Pre-warm LLM to avoid cold start on first request
     if settings.LLM_WARMUP_ENABLED:
@@ -84,7 +87,8 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("👋 DANI Engine shutting down...")
-    await background_ingestion.stop()
+    if settings.BACKGROUND_INGESTION_ENABLED:
+        await background_ingestion.stop()
     
     # Shutdown MCP
     if settings.MCP_ENABLED:

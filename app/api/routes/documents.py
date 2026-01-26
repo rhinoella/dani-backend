@@ -75,6 +75,20 @@ async def process_document_background(document_id: str, file_content: bytes):
                 logger.error(f"Document {document_id} not found during background processing")
     except Exception as e:
         logger.error(f"Background processing error for {document_id}: {e}", exc_info=True)
+        # Ensure document status is updated to FAILED even if the service didn't handle it
+        try:
+            async with get_db_context() as session:
+                from app.repositories.document_repository import DocumentRepository
+                repo = DocumentRepository(session)
+                await repo.update_status(
+                    document_id,
+                    DocumentStatus.FAILED,
+                    error_message=f"Background processing failed: {str(e)}"
+                )
+                await session.commit()
+                logger.info(f"Updated document {document_id} status to FAILED")
+        except Exception as update_error:
+            logger.error(f"Failed to update document status to FAILED: {update_error}")
 
 
 @router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)

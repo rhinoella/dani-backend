@@ -143,6 +143,11 @@ class QdrantStore:
                 f"Please try again in {e.recovery_time:.0f} seconds."
             ) from e
         except Exception as e:
+            error_str = str(e)
+            # Handle collection not found gracefully (returns empty results instead of error)
+            if "404" in error_str or "Not Found" in error_str or "doesn't exist" in error_str.lower():
+                logger.debug(f"Collection '{collection}' not found, returning empty results")
+                return []
             logger.error(f"Search failed in '{collection}': {e}")
             raise
     

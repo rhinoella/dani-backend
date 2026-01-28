@@ -578,6 +578,8 @@ class DocumentService:
         self,
         document_id: str,
         user_id: Optional[str] = None,
+        expires_in: Optional[int] = None,
+        inline: bool = False,
     ) -> Optional[str]:
         """
         Get a presigned download URL for a document.
@@ -585,6 +587,8 @@ class DocumentService:
         Args:
             document_id: Document ID
             user_id: Optional user ID for access check
+            expires_in: URL expiration time in seconds (optional, uses default if not provided)
+            inline: If True, use inline disposition for in-browser viewing
             
         Returns:
             Presigned URL or None if not found/unauthorized
@@ -602,6 +606,8 @@ class DocumentService:
             url = await self.storage.get_presigned_url(
                 key=document.storage_key,
                 filename=document.filename,
+                expiry=expires_in,
+                inline=inline,
             )
             return url
         except StorageError as e:

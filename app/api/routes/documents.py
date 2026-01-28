@@ -385,6 +385,7 @@ async def reprocess_document(
 async def get_download_url(
     document_id: str,
     expires_in: int = Query(3600, ge=60, le=86400, description="URL expiry in seconds (1 min to 24 hours)"),
+    inline: bool = Query(False, description="If true, use inline Content-Disposition for in-browser viewing"),
     service: DocumentService = Depends(get_document_service),
     current_user: Optional[User] = Depends(get_optional_user),
 ):
@@ -392,7 +393,7 @@ async def get_download_url(
     Get a presigned download URL for the original document file.
     
     The URL will be valid for the specified duration (default 1 hour, max 24 hours).
-    This is useful for downloading the original file without proxying through the server.
+    Use inline=true for in-browser viewing (PDF preview), inline=false for download.
     """
     # Check document exists and user has access
     document = await service.get_document(
@@ -412,6 +413,7 @@ async def get_download_url(
             document_id=document_id,
             user_id=current_user.id if current_user else None,
             expires_in=expires_in,
+            inline=inline,
         )
         
         if not download_url:

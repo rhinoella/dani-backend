@@ -119,7 +119,7 @@ class Settings(BaseSettings):
     HYBRID_KEYWORD_WEIGHT: float = 0.5
     
     ADAPTIVE_RETRIEVAL_ENABLED: bool = True
-    ADAPTIVE_MIN_SIMILARITY: float = 0.10  # Lowered from 0.35 - current embeddings give ~0.15-0.18 scores
+    ADAPTIVE_MIN_SIMILARITY: float = 0.05  # Lowered for RRF scores (Hybrid Search) which are typically small (0.02-0.15)
     ADAPTIVE_MAX_CHUNKS: int = 25
     ADAPTIVE_MIN_CHUNKS: int = 5
     

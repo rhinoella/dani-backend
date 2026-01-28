@@ -128,7 +128,7 @@ register_exception_handlers(app)
 
 # Rate limiting middleware (applied before other middleware)
 rate_limit_config = configure_rate_limits(
-    chat_per_minute=20,
+    chat_per_minute=60,
     retrieval_per_minute=60,
     ingestion_per_minute=10,
     auth_per_minute=30,

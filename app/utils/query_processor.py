@@ -20,8 +20,8 @@ logger = logging.getLogger(__name__)
 
 # Score normalization constants
 # nomic-embed-text with proper prefixes produces scores in 0.10-0.40 range
-SCORE_MIN_EXPECTED = 0.10  # Scores below this are very poor
-SCORE_MAX_EXPECTED = 0.45  # Scores above this are excellent (rare)
+SCORE_MIN_EXPECTED = 0.02  # Lowered for RRF scores (Hybrid Search)
+SCORE_MAX_EXPECTED = 0.25  # Lowered for RRF scores
 
 
 def normalize_relevance_score(raw_score: float) -> float:
@@ -307,8 +307,8 @@ class ConfidenceScorer:
     def __init__(
         self,
         min_chunks_for_high_confidence: int = 3,
-        min_avg_similarity: float = 0.20,   # Lowered from 0.40 for current embedding quality
-        min_top_similarity: float = 0.25,   # Lowered from 0.50 for current embedding quality
+        min_avg_similarity: float = 0.05,   # Lowered for RRF scores
+        min_top_similarity: float = 0.08,   # Lowered to accept RRF scores (~0.13 is good)
     ):
         self.min_chunks = min_chunks_for_high_confidence
         self.min_avg_similarity = min_avg_similarity

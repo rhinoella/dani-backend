@@ -229,14 +229,17 @@ class StorageService:
         key: str,
         expiry: Optional[int] = None,
         filename: Optional[str] = None,
+        inline: bool = False,
     ) -> str:
         """
-        Generate a presigned URL for direct download.
+        Generate a presigned URL for direct download or inline viewing.
         
         Args:
             key: S3 object key
             expiry: URL expiration time in seconds (default from config)
             filename: Optional filename for Content-Disposition header
+            inline: If True, use 'inline' disposition (for viewing in browser)
+                   If False, use 'attachment' disposition (for download)
             
         Returns:
             Presigned URL string
@@ -251,9 +254,10 @@ class StorageService:
             'Key': key,
         }
         
-        # Add Content-Disposition for download with filename
+        # Add Content-Disposition header
         if filename:
-            params['ResponseContentDisposition'] = f'attachment; filename="{filename}"'
+            disposition = 'inline' if inline else 'attachment'
+            params['ResponseContentDisposition'] = f'{disposition}; filename="{filename}"'
         
         try:
             url = self.client.generate_presigned_url(

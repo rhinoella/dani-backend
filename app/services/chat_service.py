@@ -489,8 +489,25 @@ Summary:"""
         if validated.get("warnings"):
             logger.info(f"Validation warnings: {validated['warnings']}")
 
+        # Helper to check for negative answers
+        negative_phrases = [
+            "i don't have a record",
+            "i don't have any record",
+            "i cannot find",
+            "i couldn't find",
+            "no information found",
+            "doesn't mention",
+            "does not mention",
+            "i'm sorry, but i don't have",
+            "i am sorry, but i don't have",
+        ]
+        
+        is_negative = any(phrase in answer.lower() for phrase in negative_phrases)
+
         # Build sources with enhanced attribution
-        sources = self._build_sources(chunks)
+        # If the answer is negative (refusal), typically we shouldn't show sources 
+        # as they weren't used to form an answer (or were irrelevant)
+        sources = [] if is_negative else self._build_sources(chunks)
 
         return {
             "query": query,

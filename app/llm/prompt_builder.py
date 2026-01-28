@@ -65,27 +65,44 @@ class PromptBuilder:
             conversation_history: List of {"role": "user"|"assistant", "content": str}
         """
         if not chunks:
-            context = "No relevant meeting notes found."
+            context = "No relevant meeting notes or documents found."
         else:
             # Optionally sort by date (newest first or chronological)
             if order_by_date:
                 chunks = sorted(chunks, key=lambda c: c.get("date", 0), reverse=True)
             
-            blocks = []
+            # Separate documents from meetings
+            meeting_blocks = []
+            document_blocks = []
+            
             for i, c in enumerate(chunks, 1):
-                title = c.get("title", "Unknown meeting")
-                date = self._format_date(c.get("date"))
-                speakers = c.get("speakers", [])
-                speakers_str = ", ".join(speakers) if speakers else "Unknown speakers"
+                title = c.get("title", "Unknown")
+                is_document = c.get("document_source", False) or c.get("doc_type") == "document"
                 
                 # Increased context: ~1250 tokens (5000 chars) per chunk for better comprehension
                 text = c.get("text", "").strip()[:5000]
                 
-                # Format with source number for citation
-                block = f"[Source {i}] {title}\nDate: {date}\nSpeakers: {speakers_str}\n\n{text}"
-                blocks.append(block)
+                if is_document:
+                    # Format for documents
+                    doc_id = c.get("document_id", "")
+                    block = f"[Document {i}] {title}\n\n{text}"
+                    document_blocks.append(block)
+                else:
+                    # Format for meetings (with date and speakers)
+                    date = self._format_date(c.get("date"))
+                    speakers = c.get("speakers", [])
+                    speakers_str = ", ".join(speakers) if speakers else "Unknown speakers"
+                    block = f"[Meeting {i}] {title}\nDate: {date}\nSpeakers: {speakers_str}\n\n{text}"
+                    meeting_blocks.append(block)
 
-            context = "\n\n" + "="*50 + "\n\n".join(blocks)
+            # Build combined context
+            context_parts = []
+            if meeting_blocks:
+                context_parts.append("MEETING TRANSCRIPTS:\n" + "\n\n" + "="*50 + "\n\n".join(meeting_blocks))
+            if document_blocks:
+                context_parts.append("UPLOADED DOCUMENTS:\n" + "\n\n" + "="*50 + "\n\n".join(document_blocks))
+            
+            context = "\n\n".join(context_parts) if context_parts else "No relevant content found."
         
         # Add output format instructions if specified
         format_instructions = ""
@@ -96,28 +113,34 @@ class PromptBuilder:
         
         grounding_instruction = """
 IMPORTANT INSTRUCTIONS:
-- Base your answer on the provided meeting sources and conversation history below
-- When referencing specific information, refer to the meeting context naturally (e.g., "In the discussion with [Company/Person]...", "During the [Meeting Title]...").
-- You can mention "source [number]" if needed for ambiguity, but prefer using the meeting title or context description.
-- If the sources don't contain enough information to answer, say "I don't have enough information about this in the meeting notes"
+- FOCUS ON THE CURRENT QUESTION: Answer based ONLY on the KNOWLEDGE BASE SOURCES provided above that are relevant to the current question.
+- TOPIC SWITCHING: If the user asks about a NEW topic (different from conversation history), focus ENTIRELY on the new topic. Do NOT reference or blend in information from previous topics discussed in the conversation.
+- When referencing meeting information, use natural language (e.g., "In the discussion with [Company/Person]...", "During the [Meeting Title]...").
+- When referencing document information, cite the document name (e.g., "According to the [Document Name]...", "The document states...").
+- If the sources don't contain enough information to answer, say "I don't have enough information about this in the available content"
 - Do NOT make up information that isn't in the sources
 - RESPONSE FORMAT: Write in PLAIN TEXT paragraphs only. DO NOT use markdown, bullet points, or lists.
-- Explain discussions in detail with a narrative flow. Provide comprehensive answers that fully address the question with all relevant details from the sources."""
+- Explain discussions in detail with a narrative flow. Provide comprehensive answers that fully address the question.
+- CONVERSATION HISTORY is provided only for context (to understand pronouns like "it", "they", follow-up questions). It is NOT a source of information - use only the KNOWLEDGE BASE SOURCES above."""
 
-        # Format conversation history if provided (limit to last 6 exchanges for context window)
+        # Format conversation history if provided (limit to last 4 exchanges - reduced to avoid topic bleeding)
         history_section = ""
         if conversation_history:
-            # Take only the last 6 messages to keep prompt size manageable
-            recent_history = conversation_history[-6:]
+            # Take only the last 4 messages - enough for pronoun resolution but not overwhelming
+            recent_history = conversation_history[-4:]
             history_lines = []
             for msg in recent_history:
                 role = "User" if msg.get("role") == "user" else "Assistant"
-                content = msg.get("content", "")[:500]  # Truncate long messages
+                # Truncate assistant messages more aggressively to reduce topic bleeding
+                max_len = 200 if msg.get("role") == "assistant" else 300
+                content = msg.get("content", "")[:max_len]
+                if len(msg.get("content", "")) > max_len:
+                    content += "..."
                 history_lines.append(f"{role}: {content}")
             
             if history_lines:
                 history_section = f"""
-CONVERSATION HISTORY:
+CONVERSATION CONTEXT (for understanding follow-up questions only - NOT a source of information):
 {chr(10).join(history_lines)}
 
 ---
@@ -126,7 +149,7 @@ CONVERSATION HISTORY:
         return f"""
 {DANI_SYSTEM_PROMPT}
 
-MEETING SOURCES:
+KNOWLEDGE BASE SOURCES (USE THESE TO ANSWER):
 {context}
 
 {grounding_instruction}

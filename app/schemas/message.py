@@ -2,7 +2,7 @@
 Message schemas.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from typing import Optional, List, Any, Union
 from datetime import datetime
 from enum import Enum
@@ -65,7 +65,8 @@ class MessageResponse(BaseModel):
     content: str
     sources: Optional[List[SourceReference]] = None
     confidence_score: Optional[float] = None
-    metadata: Optional[dict] = Field(None, validation_alias="metadata_")
+    # Use AliasChoices to accept both explicit 'metadata=' and ORM 'metadata_' attribute
+    metadata: Optional[dict] = Field(None, validation_alias=AliasChoices('metadata', 'metadata_'))
     created_at: datetime
     
     model_config = {"from_attributes": True}

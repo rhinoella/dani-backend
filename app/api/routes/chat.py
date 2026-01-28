@@ -100,6 +100,8 @@ async def chat(
     logger.info(f"[CHAT] Query: {req.query[:100]}...")
     logger.info(f"[CHAT] Stream: {req.stream}, User: {current_user.id if current_user else 'anonymous'}")
     logger.info(f"[CHAT] Incoming conversation_id: {req.conversation_id}")
+    logger.info(f"[CHAT] Incoming document_ids: {req.document_ids}")
+    logger.info(f"[CHAT] Incoming attachments: {req.attachments}")
     
     conversation_id = req.conversation_id
     message_id = None
@@ -217,107 +219,79 @@ async def chat(
                     logger.warning(f"[CHAT] Failed to load conversation history: {e}")
                     conversation_history = []
             
-            # Streaming response - tokens arrive as they're generated
-            async def generate():
-                # Send conversation_id first if authenticated
-                if current_user and conversation_id:
-                    import json
-                    logger.info(f"[CHAT] Sending meta with conversation_id: {conversation_id}")
-                    meta_data = {'type': 'meta', 'conversation_id': conversation_id}
-                    # Include the user message ID so frontend can update its temp ID
-                    if user_message:
-                        meta_data['user_message_id'] = user_message.id
-                    yield f"data: {json.dumps(meta_data)}\n\n"
+            # Shared state for storing response after streaming completes
+            stream_data = {
+                "full_response": "",
+                "sources": [],
+                "timing_data": {},
+                "tool_result": None,
+                "tool_name": None,
+                "completed": False,
+            }
+            
+            async def store_response_now():
+                """Store assistant response immediately after streaming completes."""
+                full_response = stream_data["full_response"]
+                sources = stream_data["sources"]
+                timing_data = stream_data["timing_data"]
+                tool_result = stream_data["tool_result"]
+                tool_name = stream_data["tool_name"]
                 
-                full_response = ""
-                sources = []
-                timing_data = {}
-                tool_result = None
-                tool_name = None
+                logger.info(f"[CHAT] Storing response: full_response_len={len(full_response)}, sources_count={len(sources)}, tool_result={tool_result is not None}")
                 
-                async for chunk in service.answer_stream(
-                    req.query, 
-                    output_format=req.output_format,
-                    conversation_history=conversation_history,
-                    conversation_id=conversation_id if current_user else None,
-                    session=db if current_user else None,
-                    user_id=str(current_user.id) if current_user else None,
-                    doc_type=req.doc_type,
-                    document_ids=effective_document_ids if effective_document_ids else None,
-                ):
-                    print(f"DEBUG: Got chunk: {chunk[:50]}...", flush=True)
-                    yield f"data: {chunk}\n\n"
+                if not current_user or not conversation_id:
+                    logger.info(f"[CHAT] Skipping storage: no user or conversation_id")
+                    return
                     
-                    # Collect response for storage
-                    import json
-                    chunk_data = json.loads(chunk)
-                    if chunk_data.get("type") == "token":
-                        full_response += chunk_data.get("content", "")
-                    elif chunk_data.get("type") == "sources":
-                        sources = chunk_data.get("content", [])
-                    elif chunk_data.get("type") == "timing":
-                        timing_data = chunk_data.get("content", {})
-                    elif chunk_data.get("type") == "tool_result":
-                        tool_result = chunk_data.get("data")
-                        tool_name = chunk_data.get("tool")
-                        if tool_result and "sources" in tool_result:
-                            sources = tool_result.get("sources", [])
-                    elif chunk_data.get("type") == "tool_call":
-                        tool_name = chunk_data.get("tool")
+                if not full_response and not tool_result:
+                    logger.warning(f"[CHAT] No content to store")
+                    return
                 
-                # Log timing summary
-                if timing_data:
-                    logger.info(f"[CHAT] Response timing: retrieval={timing_data.get('retrieval_ms')}ms, "
-                               f"generation={timing_data.get('generation_ms')}ms, "
-                               f"total={timing_data.get('total_ms')}ms, "
-                               f"chunks={timing_data.get('chunks_used')}, "
-                               f"tokens={timing_data.get('tokens_generated')}")
-                
-                # Store assistant response for authenticated users with FULL sources
-                if current_user and conversation_id and (full_response or tool_result):
-                    try:
-                        logger.info(f"[CHAT] Storing assistant response to conversation: {conversation_id}")
-                        logger.info(f"[CHAT] Storing {len(sources)} sources with the message")
-                        conv_service = ConversationService(db, conv_cache, user_conv_cache)
-                        
-                        # Store complete source information for later retrieval
-                        sources_to_store = [
-                            {
-                                "title": s.get("title"),
-                                "date": s.get("date"),
-                                "transcript_id": s.get("transcript_id"),
-                                "speakers": s.get("speakers", []),
-                                "text": s.get("text") or s.get("text_preview"),
-                                "text_preview": s.get("text_preview") or s.get("text"),
-                                "relevance_score": s.get("relevance_score"),
-                                "meeting_category": s.get("meeting_category"),
-                                "category_confidence": s.get("category_confidence"),
-                            }
-                            for s in sources
-                        ]
-                        
-                        # Ensure content is not empty for DB constraint
-                        content_to_store = full_response
-                        if not content_to_store and tool_result:
-                            if tool_name == "infographic_generator":
-                                headline = tool_result.get("structured_data", {}).get("headline", "")
-                                content_to_store = f"Generated infographic: {headline}" if headline else "Generated infographic."
-                            elif tool_name == "content_writer":
-                                content_to_store = "Generated content."
-                            else:
-                                content_to_store = "Tool execution complete."
+                try:
+                    from app.database.connection import get_db_context
+                    
+                    logger.info(f"[CHAT] Storing assistant response to conversation: {conversation_id}")
+                    
+                    # Store complete source information for later retrieval
+                    sources_to_store = [
+                        {
+                            "title": s.get("title"),
+                            "date": s.get("date"),
+                            "transcript_id": s.get("transcript_id"),
+                            "speakers": s.get("speakers", []),
+                            "text": s.get("text") or s.get("text_preview"),
+                            "text_preview": s.get("text_preview") or s.get("text"),
+                            "relevance_score": s.get("relevance_score"),
+                            "meeting_category": s.get("meeting_category"),
+                            "category_confidence": s.get("category_confidence"),
+                        }
+                        for s in sources
+                    ]
+                    
+                    # Ensure content is not empty for DB constraint
+                    content_to_store = full_response
+                    if not content_to_store and tool_result:
+                        if tool_name == "infographic_generator":
+                            headline = tool_result.get("structured_data", {}).get("headline", "")
+                            content_to_store = f"Generated infographic: {headline}" if headline else "Generated infographic."
+                        elif tool_name == "content_writer":
+                            content_to_store = "Generated content."
+                        else:
+                            content_to_store = "Tool execution complete."
 
-                        # For infographic, exclude base64 image from storage (too large ~1MB)
-                        # Keep s3_key and image_url for regeneration
-                        tool_result_to_store = tool_result
-                        if tool_name == "infographic_generator" and tool_result:
-                            tool_result_to_store = {
-                                k: v for k, v in tool_result.items() 
-                                if k != "image"  # Exclude large base64 data
-                            }
-                            logger.info(f"[CHAT] Storing infographic without base64 image. s3_key={tool_result_to_store.get('s3_key')}")
+                    # For infographic, exclude base64 image from storage (too large ~1MB)
+                    tool_result_to_store = tool_result
+                    if tool_name == "infographic_generator" and tool_result:
+                        tool_result_to_store = {
+                            k: v for k, v in tool_result.items() 
+                            if k != "image"  # Exclude large base64 data
+                        }
+                        logger.info(f"[CHAT] Storing infographic without base64 image. s3_key={tool_result_to_store.get('s3_key')}")
 
-                        assistant_msg = await conv_service.add_message(
+                    # Use fresh database session for storage
+                    async with get_db_context() as storage_db:
+                        storage_conv_service = ConversationService(storage_db, conv_cache, user_conv_cache)
+                        assistant_msg = await storage_conv_service.add_message(
                             conversation_id=conversation_id,
                             user_id=current_user.id,
                             role="assistant",
@@ -331,29 +305,92 @@ async def chat(
                             }
                         )
                         logger.info(f"[CHAT] Assistant message stored: id={assistant_msg.id}, "
-                                   f"response_length={len(full_response)}, sources_count={len(sources_to_store)}")
-                    except Exception as e:
-                        logger.error(f"[CHAT] Failed to store assistant message: {e}")
+                                   f"response_length={len(content_to_store)}, sources_count={len(sources_to_store)}")
+                except Exception as e:
+                    logger.error(f"[CHAT] Failed to store assistant message: {e}", exc_info=True)
                 
-                # Log RAG analytics for streaming requests
+                # Log RAG analytics
                 try:
-                    rag_analytics = RAGAnalyticsService(db)
-                    await rag_analytics.log_interaction(
-                        query=req.query,
-                        user_id=current_user.id if current_user else None,
-                        conversation_id=conversation_id,
-                        sources=sources if sources else None,
-                        answer_length=len(full_response),
-                        output_format=req.output_format,
-                        chunks_used=timing_data.get('chunks_used', 0),
-                        retrieval_latency_ms=timing_data.get('retrieval_ms'),
-                        generation_latency_ms=timing_data.get('generation_ms'),
-                        total_latency_ms=timing_data.get('total_ms'),
-                        success=True,
-                    )
-                    logger.info(f"[CHAT] RAG analytics logged for conversation: {conversation_id}")
+                    from app.database.connection import get_db_context
+                    async with get_db_context() as analytics_db:
+                        rag_analytics = RAGAnalyticsService(analytics_db)
+                        await rag_analytics.log_interaction(
+                            query=req.query,
+                            user_id=current_user.id if current_user else None,
+                            conversation_id=conversation_id,
+                            sources=sources if sources else None,
+                            answer_length=len(full_response),
+                            output_format=req.output_format,
+                            chunks_used=timing_data.get('chunks_used', 0),
+                            retrieval_latency_ms=timing_data.get('retrieval_ms'),
+                            generation_latency_ms=timing_data.get('generation_ms'),
+                            total_latency_ms=timing_data.get('total_ms'),
+                            success=True,
+                        )
+                        logger.info(f"[CHAT] RAG analytics logged for conversation: {conversation_id}")
                 except Exception as e:
                     logger.warning(f"[CHAT] Failed to log RAG analytics (stream): {e}")
+            
+            # Streaming response - tokens arrive as they're generated
+            async def generate():
+                # Send conversation_id first if authenticated
+                if current_user and conversation_id:
+                    import json
+                    logger.info(f"[CHAT] Sending meta with conversation_id: {conversation_id}")
+                    meta_data = {'type': 'meta', 'conversation_id': conversation_id}
+                    # Include the user message ID so frontend can update its temp ID
+                    if user_message:
+                        meta_data['user_message_id'] = user_message.id
+                    yield f"data: {json.dumps(meta_data)}\n\n"
+                
+                try:
+                    async for chunk in service.answer_stream(
+                        req.query, 
+                        output_format=req.output_format,
+                        conversation_history=conversation_history,
+                        conversation_id=conversation_id if current_user else None,
+                        session=db if current_user else None,
+                        user_id=str(current_user.id) if current_user else None,
+                        doc_type=req.doc_type,
+                        document_ids=effective_document_ids if effective_document_ids else None,
+                    ):
+                        yield f"data: {chunk}\n\n"
+                        
+                        # Collect response for storage
+                        import json
+                        chunk_data = json.loads(chunk)
+                        if chunk_data.get("type") == "token":
+                            stream_data["full_response"] += chunk_data.get("content", "")
+                        elif chunk_data.get("type") == "sources":
+                            stream_data["sources"] = chunk_data.get("content", [])
+                            # Debug: Log source relevance scores
+                            for src in stream_data["sources"]:
+                                logger.info(f"[CHAT] Source received: title='{src.get('title')}', relevance_score={src.get('relevance_score')}, raw_score={src.get('raw_score')}")
+                        elif chunk_data.get("type") == "timing":
+                            stream_data["timing_data"] = chunk_data.get("content", {})
+                        elif chunk_data.get("type") == "tool_result":
+                            stream_data["tool_result"] = chunk_data.get("data")
+                            stream_data["tool_name"] = chunk_data.get("tool")
+                            if stream_data["tool_result"] and "sources" in stream_data["tool_result"]:
+                                stream_data["sources"] = stream_data["tool_result"].get("sources", [])
+                        elif chunk_data.get("type") == "tool_call":
+                            stream_data["tool_name"] = chunk_data.get("tool")
+                finally:
+                    # Mark stream as completed
+                    stream_data["completed"] = True
+                    logger.info(f"[CHAT] Stream completed. Response length: {len(stream_data['full_response'])}")
+                    
+                    # Store response directly in finally block
+                    await store_response_now()
+                
+                # Log timing summary
+                timing_data = stream_data["timing_data"]
+                if timing_data:
+                    logger.info(f"[CHAT] Response timing: retrieval={timing_data.get('retrieval_ms')}ms, "
+                               f"generation={timing_data.get('generation_ms')}ms, "
+                               f"total={timing_data.get('total_ms')}ms, "
+                               f"chunks={timing_data.get('chunks_used')}, "
+                               f"tokens={timing_data.get('tokens_generated')}")
                 
                 logger.info(f"[CHAT] === Chat Request Complete === conversation_id={conversation_id}")
             

@@ -50,8 +50,9 @@ def test_build_chat_prompt_basic(prompt_builder, sample_chunks):
     assert "Q1 Strategy Meeting" in prompt
     assert "Engineering Sync" in prompt
     
-    # Verify prompt structure
-    assert "MEETING SOURCES:" in prompt
+    # Verify prompt structure (now uses KNOWLEDGE BASE SOURCES and MEETING TRANSCRIPTS)
+    assert "KNOWLEDGE BASE SOURCES:" in prompt
+    assert "MEETING TRANSCRIPTS:" in prompt
     assert "User Question:" in prompt
     assert "Answer:" in prompt
 
@@ -65,8 +66,8 @@ def test_build_chat_prompt_no_chunks(prompt_builder):
     # Should still have structure
     assert DANI_SYSTEM_PROMPT in prompt
     assert query in prompt
-    assert "MEETING SOURCES:" in prompt
-    assert "No relevant meeting notes found" in prompt
+    assert "KNOWLEDGE BASE SOURCES:" in prompt
+    assert "No relevant meeting notes or documents found" in prompt
 
 
 def test_build_chat_prompt_with_summary_format(prompt_builder, sample_chunks):
@@ -179,7 +180,7 @@ def test_build_chat_prompt_with_slides_format(prompt_builder, sample_chunks):
 
 def test_chunk_truncation(prompt_builder):
     """Test that long chunks are truncated"""
-    long_text = "A" * 3000  # Longer than 2500 char limit
+    long_text = "A" * 6000  # Longer than 5000 char limit
     chunks = [{
         "title": "Long Meeting",
         "date": 1734480000000,
@@ -189,10 +190,10 @@ def test_chunk_truncation(prompt_builder):
     
     prompt = prompt_builder.build_chat_prompt("test query", chunks)
     
-    # Text should be truncated to 2500 chars
+    # Text should be truncated to 5000 chars (updated limit for better comprehension)
     assert long_text not in prompt
-    # Should contain truncated text (2500 A's)
-    assert "A" * 2500 in prompt or "A" * 2499 in prompt
+    # Should contain truncated text (5000 A's)
+    assert "A" * 5000 in prompt or "A" * 4999 in prompt
 
 
 def test_multiple_chunks_separated(prompt_builder, sample_chunks):
@@ -201,9 +202,9 @@ def test_multiple_chunks_separated(prompt_builder, sample_chunks):
     
     prompt = prompt_builder.build_chat_prompt(query, sample_chunks)
     
-    # Chunks should be separated by delimiter (now uses === separator)
-    assert "[Source 1]" in prompt
-    assert "[Source 2]" in prompt
+    # Chunks should be separated by delimiter with [Meeting N] format
+    assert "[Meeting 1]" in prompt
+    assert "[Meeting 2]" in prompt
     
     # Both meeting titles should be present
     assert "Q1 Strategy Meeting" in prompt
@@ -238,3 +239,59 @@ def test_invalid_output_format(prompt_builder, sample_chunks):
     # Should have basic structure but no format instructions
     assert DANI_SYSTEM_PROMPT in prompt
     assert query in prompt
+
+
+def test_mixed_documents_and_meetings(prompt_builder):
+    """Test that documents and meetings are formatted differently"""
+    mixed_chunks = [
+        {
+            "title": "Strategy Meeting",
+            "date": 1734480000000,
+            "text": "We discussed Q1 priorities.",
+            "speakers": ["John", "Jane"],
+            "document_source": False,
+        },
+        {
+            "title": "CROSSVEST Concept Note",
+            "text": "CrossVest is a platform for African investments.",
+            "document_source": True,
+            "doc_type": "document",
+        },
+    ]
+    
+    prompt = prompt_builder.build_chat_prompt("What is CrossVest?", mixed_chunks)
+    
+    # Should have both sections
+    assert "MEETING TRANSCRIPTS:" in prompt
+    assert "UPLOADED DOCUMENTS:" in prompt
+    
+    # Meetings should use [Meeting N] format with speakers
+    assert "[Meeting 1]" in prompt
+    assert "Speakers: John, Jane" in prompt
+    
+    # Documents should use [Document N] format without speakers
+    assert "[Document 2]" in prompt
+    assert "CROSSVEST Concept Note" in prompt
+    
+    # Both content should be present
+    assert "We discussed Q1 priorities." in prompt
+    assert "CrossVest is a platform" in prompt
+
+
+def test_documents_only(prompt_builder):
+    """Test that only documents shows UPLOADED DOCUMENTS section"""
+    doc_chunks = [
+        {
+            "title": "Technical Spec",
+            "text": "API documentation for the system.",
+            "document_source": True,
+            "doc_type": "document",
+        },
+    ]
+    
+    prompt = prompt_builder.build_chat_prompt("What's in the spec?", doc_chunks)
+    
+    # Should have UPLOADED DOCUMENTS but not MEETING TRANSCRIPTS
+    assert "UPLOADED DOCUMENTS:" in prompt
+    assert "MEETING TRANSCRIPTS:" not in prompt
+    assert "[Document 1]" in prompt

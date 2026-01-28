@@ -58,6 +58,7 @@ logger = logging.getLogger(__name__)
 
 
 # Style-specific visual prompts for image generation
+# Updated: Force reload trigger
 STYLE_PROMPTS = {
     InfographicStyle.MODERN: "modern sleek design, clean lines, gradient backgrounds, sans-serif typography, professional color palette with blue and white accents",
     InfographicStyle.CORPORATE: "corporate business style, professional navy and gray colors, formal typography, structured layout, executive presentation quality",
@@ -68,43 +69,34 @@ STYLE_PROMPTS = {
 
 
 # Prompt template for extracting structured infographic data
-EXTRACTION_PROMPT = """You are an expert data visualization specialist extracting data for a HIGH-IMPACT infographic.
+EXTRACTION_PROMPT = """Extract infographic data from the context below.
 
 CONTEXT:
 {context}
 
-USER REQUEST:
-{request}
+USER REQUEST: {request}
 
-Extract the following in JSON format:
+Return JSON with this EXACT structure:
 {{
-    "headline": "IMPACTFUL headline with specific data (4-8 words). MUST include a number, percentage, or specific metric. Examples: 'Q4 Revenue Surges 35% to $2.5M', 'Customer Retention Hits Record 94%'",
-    "subtitle": "Contextual supporting line (10-15 words)", 
-    "stats": [
-        {{"value": "$X.XM or XX%", "label": "Clear metric name", "icon": "💰📈🎯👥🌏📊"}},
-        // EXACTLY 4-5 stats. Each MUST have a numeric value with unit (%, $, x, etc.)
-    ],
-    "key_points": [
-        "Specific insight with numbers: 'Enterprise sales grew 45% YoY'",
-        "Actionable finding with data: 'APAC region outperformed at 52% growth'",
-        // EXACTLY 3-4 points. Each MUST be 8-15 words with specific data
-    ],
-    "source_summary": "Meeting/document name with date"
+  "headline": "Short headline with a key number (5-8 words)",
+  "subtitle": "Brief context (under 12 words)",
+  "stats": [
+    {{"value": "$X.XM", "label": "metric name", "icon": "💰"}},
+    {{"value": "XX%", "label": "metric name", "icon": "📈"}},
+    {{"value": "XX", "label": "metric name", "icon": "👥"}}
+  ],
+  "key_points": [
+    "Key insight with a number",
+    "Another insight with data"
+  ],
+  "source_summary": "Source name"
 }}
 
-CRITICAL QUALITY RULES:
-1. HEADLINE: Must be impactful with specific numbers. NEVER use generic words like 'Summary', 'Overview', 'Report'
-2. STATS: Every stat MUST have a numeric value (e.g., '$2.5M', '35%', '120', '4.1x'). NO vague words like 'High', 'Good', 'Strong'
-3. ICONS: Every stat MUST have an emoji icon (💰📈🎯👥🌏📊🚀💡✅)
-4. KEY POINTS: Each point must include specific numbers/percentages from the context
-5. Extract ALL numbers mentioned in the context - they are valuable data points
-
-If the context lacks specific numbers, look for:
-- Dates, counts, percentages, dollar amounts
-- Comparisons (up/down, before/after)
-- Rankings, scores, ratings
-
-Output ONLY valid JSON:"""
+RULES:
+- Include 3-4 stats with numeric values
+- Include 2-3 key points
+- Use emojis: 💰📈🎯👥🌏📊🚀💡
+- Output ONLY the JSON, no other text"""
 
 
 class InfographicService:
@@ -296,12 +288,17 @@ class InfographicService:
                 }
 
             # Step 2: Format context (standard flow)
+            # IMPORTANT: Limit context size to prevent Ollama empty response
+            MAX_CHUNKS = 5  # Use top 5 most relevant chunks
+            MAX_CHUNK_TEXT = 1500  # Chars per chunk
+            MAX_TOTAL_CONTEXT = 8000  # Total context chars
+            
             context_parts = []
             sources = []
             
-            for chunk in chunks:
+            for chunk in chunks[:MAX_CHUNKS]:
                 title = chunk.get("title") or "Untitled"
-                text = chunk.get("text", "")
+                text = chunk.get("text", "")[:MAX_CHUNK_TEXT]  # Truncate chunk text
                 date = chunk.get("date")
                 raw_score = chunk.get("score", 0)
                 
@@ -309,7 +306,7 @@ class InfographicService:
                 sources.append({
                     "title": title,
                     "date": date,
-                    "text_preview": text,
+                    "text_preview": text[:500],  # Preview is shorter
                     "score": raw_score,
                     "relevance_score": normalize_relevance_score(raw_score),  # Normalized 0-100%
                     "relevance_label": get_relevance_label(raw_score),  # Human-readable label
@@ -318,6 +315,10 @@ class InfographicService:
                 })
 
             context = "\n\n---\n\n".join(context_parts)
+            # Truncate total context if still too long
+            if len(context) > MAX_TOTAL_CONTEXT:
+                context = context[:MAX_TOTAL_CONTEXT] + "\n\n[Context truncated for processing]"
+                logger.info(f"[INFOGRAPHIC] Context truncated to {MAX_TOTAL_CONTEXT} chars")
 
         # Step 3: Extract structured data
         extraction_start = time.time()
@@ -401,15 +402,27 @@ class InfographicService:
         logger.info(f"[INFOGRAPHIC] Generated infographic in {total_ms}ms")
 
         # Step 5: Persist to S3 and database
+        logger.info(f"[INFOGRAPHIC] image_result keys: {list(image_result.keys())}")
+        logger.info(f"[INFOGRAPHIC] image_result.get('image') exists: {bool(image_result.get('image'))}")
+        logger.info(f"[INFOGRAPHIC] persist={persist}, user_id={user_id}")
+        
         s3_key = None
         s3_url = None
         image_size = None
+        presigned_url = None
         
         if persist and image_result.get("image"):
             try:
+                logger.info(f"[INFOGRAPHIC] Starting S3 upload...")
                 # Decode base64 image
                 image_bytes = base64.b64decode(image_result["image"])
                 image_size = len(image_bytes)
+                logger.info(f"[INFOGRAPHIC] Image decoded: {image_size} bytes")
+                
+                # Sanitize headline for S3 metadata (ASCII only)
+                raw_headline = structured_data.get("headline", "")[:100]
+                # Remove non-ASCII characters (including emojis)
+                sanitized_headline = raw_headline.encode('ascii', 'ignore').decode('ascii')
                 
                 # Upload to S3
                 s3_result = await self.storage.upload(
@@ -420,11 +433,12 @@ class InfographicService:
                     metadata={
                         "type": "infographic",
                         "style": style.value,
-                        "headline": structured_data.get("headline", "")[:100],
+                        "headline": sanitized_headline,
                     },
                 )
                 s3_key = s3_result["key"]
                 s3_url = s3_result["url"]
+                logger.info(f"[INFOGRAPHIC] S3 upload complete: {s3_key}")
                 
                 # Generate presigned URL for browser access
                 try:
@@ -439,9 +453,11 @@ class InfographicService:
                 
                 logger.info(f"[INFOGRAPHIC] Uploaded to S3: {s3_key}")
             except Exception as e:
-                logger.error(f"[INFOGRAPHIC] S3 upload failed: {e}")
+                logger.error(f"[INFOGRAPHIC] S3 upload failed: {e}", exc_info=True)
                 presigned_url = None
                 # Continue without persistence
+        else:
+            logger.warning(f"[INFOGRAPHIC] S3 upload SKIPPED: persist={persist}, has_image={bool(image_result.get('image'))}")
         
         # Save to database
         if persist and db:
@@ -497,18 +513,141 @@ class InfographicService:
             },
         }
 
+    async def _persist_infographic(
+        self,
+        db: AsyncSession,
+        user_id: Optional[str],
+        request: str,
+        style: InfographicStyle,
+        structured_data: Dict[str, Any],
+        image_result: Dict[str, Any],
+        sources: List[Dict[str, Any]],
+        result: Dict[str, Any],
+    ) -> Optional[str]:
+        """
+        Persist infographic to S3 and database (used by enhanced context path).
+        
+        Args:
+            db: Database session
+            user_id: User ID for ownership
+            request: Original request text
+            style: Infographic style
+            structured_data: Extracted structured data
+            image_result: Image generation result with base64 data
+            sources: Source references
+            result: Result dict to update with s3_key and image_url
+            
+        Returns:
+            Infographic ID if saved successfully, None otherwise
+        """
+        logger.info(f"[INFOGRAPHIC] _persist_infographic called with image_result keys: {list(image_result.keys())}")
+        logger.info(f"[INFOGRAPHIC] image_result has 'image': {bool(image_result.get('image'))}")
+        
+        s3_key = None
+        s3_url = None
+        presigned_url = None
+        image_size = None
+        
+        # Upload image to S3 if we have image data
+        if image_result.get("image"):
+            try:
+                # Decode base64 image
+                image_bytes = base64.b64decode(image_result["image"])
+                image_size = len(image_bytes)
+                
+                # Sanitize headline for S3 metadata (ASCII only)
+                raw_headline = structured_data.get("headline", "")[:100]
+                # Remove non-ASCII characters (including emojis)
+                sanitized_headline = raw_headline.encode('ascii', 'ignore').decode('ascii')
+                
+                # Upload to S3
+                s3_result = await self.storage.upload(
+                    file_content=image_bytes,
+                    filename=f"infographic_{int(time.time())}.png",
+                    user_id=user_id,
+                    content_type="image/png",
+                    metadata={
+                        "type": "infographic",
+                        "style": style.value,
+                        "headline": sanitized_headline,
+                    },
+                )
+                s3_key = s3_result["key"]
+                s3_url = s3_result["url"]
+                
+                # Generate presigned URL for browser access
+                try:
+                    presigned_url = await self.storage.get_presigned_url(
+                        s3_key,
+                        expiry=3600 * 24 * 365,  # 1 year
+                    )
+                    logger.info(f"[INFOGRAPHIC] Generated presigned URL for {s3_key}")
+                except Exception as e:
+                    logger.error(f"[INFOGRAPHIC] Failed to generate presigned URL: {e}")
+                    presigned_url = s3_url  # Fallback to regular URL
+                
+                logger.info(f"[INFOGRAPHIC] Uploaded to S3: {s3_key}")
+                
+                # Update result dict with S3 info
+                result["s3_key"] = s3_key
+                result["image_url"] = presigned_url or image_result.get("url")
+                
+            except Exception as e:
+                logger.error(f"[INFOGRAPHIC] S3 upload failed: {e}")
+                # Continue without S3 persistence
+        
+        # Save to database
+        try:
+            timing = result.get("timing", {})
+            infographic_id = await self._save_to_database(
+                db=db,
+                request=request,
+                topic=None,  # Topic not always available in enhanced path
+                style=style,
+                width=1024,
+                height=1024,
+                user_id=user_id,
+                structured_data=structured_data,
+                sources=sources,
+                chunks_used=len(sources),
+                confidence=0.8,  # Default confidence for enhanced path
+                timing=timing,
+                status=InfographicStatus.COMPLETED,
+                s3_key=s3_key,
+                s3_url=s3_url,
+                image_size=image_size,
+            )
+            logger.info(f"[INFOGRAPHIC] Saved to database: {infographic_id}")
+            return infographic_id
+        except Exception as e:
+            logger.error(f"[INFOGRAPHIC] Database save failed: {e}")
+            return None
+
     async def _extract_structured_data(
         self, 
         context: str, 
         request: str
     ) -> Dict[str, Any]:
         """Extract structured infographic data from context using LLM."""
+        # Log context size for debugging
+        logger.info(f"[INFOGRAPHIC] Context size: {len(context)} chars, request: {len(request)} chars")
+        
+        # If context is still too large, truncate more aggressively
+        MAX_CONTEXT_FOR_EXTRACTION = 6000
+        if len(context) > MAX_CONTEXT_FOR_EXTRACTION:
+            context = context[:MAX_CONTEXT_FOR_EXTRACTION] + "\n[...truncated]"
+            logger.warning(f"[INFOGRAPHIC] Context truncated to {MAX_CONTEXT_FOR_EXTRACTION} chars for extraction")
+        
         prompt = EXTRACTION_PROMPT.format(context=context, request=request)
+        logger.info(f"[INFOGRAPHIC] Extraction prompt size: {len(prompt)} chars")
         
         try:
-            # OllamaClient.generate() uses settings for temperature/tokens
-            # We include extraction instructions directly in the prompt
-            response = await self.llm.generate(prompt=prompt)
+            # Use higher num_predict to ensure complete JSON response
+            # The extraction response needs ~800-1000 tokens for complete JSON
+            response = await self.llm.generate(
+                prompt=prompt,
+                options={"num_predict": 1024, "temperature": 0.3}
+            )
             
             # Clean and parse JSON
             response = response.strip()
@@ -526,7 +665,8 @@ class InfographicService:
                 if json_end != -1 and json_end > json_start:
                     response = response[json_start:json_end+1]
             
-            data = json.loads(response)
+            # Try to fix common JSON errors from LLMs
+            data = self._parse_json_with_recovery(response)
             
             # Validate required fields
             required = ["headline", "stats"]
@@ -543,6 +683,120 @@ class InfographicService:
         except Exception as e:
             logger.error(f"[INFOGRAPHIC] Extraction failed: {e}")
             return {"error": f"Data extraction failed: {str(e)}"}
+    
+    def _parse_json_with_recovery(self, response: str) -> Dict[str, Any]:
+        """
+        Parse JSON with automatic recovery from common LLM formatting errors.
+        
+        Handles:
+        - Missing commas between elements
+        - Trailing commas
+        - Single quotes instead of double quotes
+        - Comments (// style)
+        - Unquoted keys
+        """
+        # First, try direct parsing
+        try:
+            return json.loads(response)
+        except json.JSONDecodeError:
+            pass
+        
+        # Apply fixes iteratively
+        fixed = response
+        
+        # Remove comments (// style)
+        fixed = re.sub(r'//.*?(?=\n|$)', '', fixed)
+        
+        # Replace single quotes with double quotes (but not inside strings)
+        # This is a simplified approach - handles most cases
+        fixed = re.sub(r"(?<![a-zA-Z])'([^']*)'(?![a-zA-Z])", r'"\1"', fixed)
+        
+        # Fix missing commas between array elements or object properties
+        # Pattern: }\s*{ or ]\s*[ or }\s*" or ]\s*" or "\s*{ or "\s*[
+        fixed = re.sub(r'(\})\s*(\{)', r'\1,\2', fixed)
+        fixed = re.sub(r'(\])\s*(\[)', r'\1,\2', fixed)
+        fixed = re.sub(r'(\})\s*(")', r'\1,\2', fixed)
+        fixed = re.sub(r'(\])\s*(")', r'\1,\2', fixed)
+        fixed = re.sub(r'(")\s*(\{)', r'\1,\2', fixed)
+        fixed = re.sub(r'(")\s*(\[)', r'\1,\2', fixed)
+        
+        # Fix missing commas after quoted strings followed by quoted keys
+        # "value"\n    "key" -> "value",\n    "key"
+        fixed = re.sub(r'(")\s*\n(\s*")', r'\1,\n\2', fixed)
+        
+        # Remove trailing commas before ] or }
+        fixed = re.sub(r',(\s*[\}\]])', r'\1', fixed)
+        
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        
+        # Last resort: try to extract key-value pairs manually for a minimal valid structure
+        logger.warning("[INFOGRAPHIC] Attempting manual JSON reconstruction")
+        logger.info(f"[INFOGRAPHIC] Raw response length: {len(response)} chars")
+        
+        # Extract headline
+        headline_match = re.search(r'"headline"\s*:\s*"([^"]*)"', response)
+        headline = headline_match.group(1) if headline_match else "Data Summary"
+        
+        # Extract subtitle
+        subtitle_match = re.search(r'"subtitle"\s*:\s*"([^"]*)"', response)
+        subtitle = subtitle_match.group(1) if subtitle_match else ""
+        
+        # Extract stats array - handle both complete and truncated responses
+        stats = []
+        
+        # Try full stat pattern first (with icon)
+        stats_matches = re.findall(
+            r'\{\s*"value"\s*:\s*"([^"]*)"\s*,\s*"label"\s*:\s*"([^"]*)"\s*(?:,\s*"icon"\s*:\s*"([^"]*)")?\s*\}',
+            response
+        )
+        for match in stats_matches:
+            stat = {"value": match[0], "label": match[1]}
+            if match[2]:
+                stat["icon"] = match[2]
+            stats.append(stat)
+        
+        # If no complete stats found, try to extract partial stats from truncated JSON
+        if not stats:
+            # Look for value/label pairs even if not in complete object
+            partial_matches = re.findall(r'"value"\s*:\s*"([^"]*)"\s*,\s*"label"\s*:\s*"([^"]*)', response)
+            for match in partial_matches:
+                stats.append({"value": match[0], "label": match[1], "icon": "📊"})
+        
+        # Extract key points
+        key_points = []
+        kp_match = re.search(r'"key_points"\s*:\s*\[([^\]]*)\]?', response, re.DOTALL)
+        if kp_match:
+            kp_text = kp_match.group(1)
+            kp_items = re.findall(r'"([^"]*)"', kp_text)
+            key_points = kp_items[:4]  # Max 4 points
+        
+        if not stats:
+            # If still no stats found, try one more pattern for truncated responses
+            # Look for any "$X" or "X%" values
+            value_matches = re.findall(r'([\$€£]?[\d,.]+[%BMKx]?)', response)
+            if value_matches:
+                for i, val in enumerate(value_matches[:4]):
+                    stats.append({"value": val, "label": f"Metric {i+1}", "icon": "📊"})
+        
+        if not stats:
+            # If no stats found at all, raise the original error
+            raise json.JSONDecodeError("Could not extract valid JSON structure", response, 0)
+        
+        logger.info(f"[INFOGRAPHIC] Recovered {len(stats)} stats from truncated response")
+        
+        # Build minimal valid structure
+        result = {
+            "headline": headline,
+            "subtitle": subtitle,
+            "stats": stats,
+            "key_points": key_points if key_points else ["See detailed data below"]
+        }
+        
+        logger.info(f"[INFOGRAPHIC] Reconstructed JSON with headline='{headline}', {len(stats)} stats")
+        return result
 
     async def _generate_image(
         self,
@@ -578,9 +832,12 @@ class InfographicService:
             logger.info("[INFOGRAPHIC] Attempting direct Gemini image generation")
             image_data = self._generate_image_direct(prompt, width=width, height=height)
             
+            logger.info(f"[INFOGRAPHIC] _generate_image_direct returned: {type(image_data)}, len={len(image_data) if image_data else 0}")
+            
             if image_data:
                 # Convert bytes to base64 for consistency with existing code
                 base64_data = base64.b64encode(image_data).decode('utf-8')
+                logger.info(f"[INFOGRAPHIC] Returning image dict with base64 data len={len(base64_data)}")
                 return {
                     "image": base64_data,
                     "format": "png",  # Gemini typically returns PNG
@@ -671,6 +928,7 @@ class InfographicService:
 
         # Keep prompt simple - don't add more text, it slows generation
         enhanced_prompt = prompt
+        logger.info(f"[INFOGRAPHIC] Prompt length: {len(prompt)} chars")
 
         # Models to try in order of preference
         image_models = [
@@ -680,6 +938,7 @@ class InfographicService:
         
         try:
             client = google_genai.Client(api_key=api_key)
+            logger.info("[INFOGRAPHIC] Gemini client initialized successfully")
             
             for model_name in image_models:
                 try:
@@ -689,10 +948,15 @@ class InfographicService:
                         contents=enhanced_prompt,
                     )
                     
+                    logger.info(f"[INFOGRAPHIC] Response received from {model_name}: {type(response)}")
+                    
                     if response and response.candidates:
+                        logger.info(f"[INFOGRAPHIC] Found {len(response.candidates)} candidates")
                         for candidate in response.candidates:
                             if candidate.content and candidate.content.parts:
+                                logger.info(f"[INFOGRAPHIC] Found {len(candidate.content.parts)} parts")
                                 for part in candidate.content.parts:
+                                    logger.info(f"[INFOGRAPHIC] Part type: {type(part)}, has inline_data: {hasattr(part, 'inline_data')}")
                                     if hasattr(part, 'inline_data') and part.inline_data:
                                         # Get image data
                                         data = part.inline_data.data
@@ -700,21 +964,25 @@ class InfographicService:
                                             data = base64.b64decode(data)
                                         logger.info(f"[INFOGRAPHIC] Image generated successfully with {model_name} ({len(data)} bytes)")
                                         return data
+                    else:
+                        logger.warning(f"[INFOGRAPHIC] {model_name} response has no candidates: {response}")
                     
                     logger.warning(f"[INFOGRAPHIC] {model_name} did not return image data")
                     
                 except Exception as model_e:
-                    logger.warning(f"[INFOGRAPHIC] {model_name} failed: {model_e}")
+                    logger.warning(f"[INFOGRAPHIC] {model_name} failed: {model_e}", exc_info=True)
                     continue
             
-            logger.warning("[INFOGRAPHIC] All Gemini image models failed")
+            logger.warning("[INFOGRAPHIC] All Gemini image models failed, using PIL fallback")
             
         except Exception as e:
-            logger.error(f"[INFOGRAPHIC] Gemini client initialization failed: {e}")
+            logger.error(f"[INFOGRAPHIC] Gemini client initialization failed: {e}", exc_info=True)
 
         # Fallback to PIL-based image generation
         logger.info("[INFOGRAPHIC] Using PIL fallback for image generation")
-        return self._generate_placeholder_image(prompt, width, height)
+        pil_result = self._generate_placeholder_image(prompt, width, height)
+        logger.info(f"[INFOGRAPHIC] PIL fallback returned: {type(pil_result)}, len={len(pil_result) if pil_result else 0}")
+        return pil_result
 
     def _generate_placeholder_image(self, prompt: str, width: int = 1024, height: int = 768) -> Optional[bytes]:
         """
@@ -728,18 +996,22 @@ class InfographicService:
         Returns:
             Image data as bytes
         """
+        logger.info(f"[INFOGRAPHIC] _generate_placeholder_image called with width={width}, height={height}")
         try:
             # Create a new image with a professional color scheme
             img = Image.new('RGB', (width, height), color='#f8f9fa')
             draw = ImageDraw.Draw(img)
+            logger.info("[INFOGRAPHIC] PIL Image created successfully")
 
             # Try to use a default font, fallback to basic if not available
             try:
                 font_title = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 48)
                 font_body = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", 24)
+                logger.info("[INFOGRAPHIC] Using Arial font")
             except:
                 font_title = ImageFont.load_default()
                 font_body = ImageFont.load_default()
+                logger.info("[INFOGRAPHIC] Using default font")
 
             # Colors
             primary_color = '#1a73e8'  # Google Blue
@@ -784,10 +1056,12 @@ class InfographicService:
             # Convert to bytes
             buffer = io.BytesIO()
             img.save(buffer, format='PNG')
-            return buffer.getvalue()
+            result = buffer.getvalue()
+            logger.info(f"[INFOGRAPHIC] PIL placeholder image created: {len(result)} bytes")
+            return result
 
         except Exception as e:
-            logger.error(f"Failed to generate placeholder image: {e}")
+            logger.error(f"[INFOGRAPHIC] Failed to generate placeholder image: {e}", exc_info=True)
             return None
 
     def _validate_and_enhance_quality(

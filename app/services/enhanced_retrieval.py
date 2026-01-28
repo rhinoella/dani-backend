@@ -316,12 +316,20 @@ class EnhancedRetriever:
             avg_score = sum(scores) / len(scores)
             top_score = max(scores)
             
-            if top_score > 0.8 and avg_score > 0.7:
+            logger.info(f"[RETRIEVAL] Confidence calculation: top_score={top_score:.4f}, avg_score={avg_score:.4f}, chunks={len(final_chunks)}")
+            
+            # Adjusted thresholds for nomic-embed-text model (produces scores in 0.10-0.45 range)
+            # High: top_score > 0.35 (excellent match) and avg > 0.25 (good relevance)
+            # Medium: top_score > 0.25 (good match) and avg > 0.18 (moderate relevance)
+            # Low: below thresholds
+            if top_score > 0.35 and avg_score > 0.25:
                 confidence_level = "high"
-            elif top_score > 0.65 and avg_score > 0.5:
+            elif top_score > 0.25 and avg_score > 0.18:
                 confidence_level = "medium"
             else:
                 confidence_level = "low"
+            
+            logger.info(f"[RETRIEVAL] Confidence level: {confidence_level} (thresholds: high=0.35/0.25, medium=0.25/0.18)")
             
             confidence = {
                 "level": confidence_level,

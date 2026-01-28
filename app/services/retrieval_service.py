@@ -421,6 +421,10 @@ class RetrievalService:
             title = r.payload.get("title")
             organizer_email = r.payload.get("organizer_email")
             speakers = r.payload.get("speakers", [])
+            
+            # Determine if this is from a document or transcript
+            is_document = r.payload.get("document_source", False) or r.source == "document"
+            
             inferred_category, category_confidence = infer_meeting_category(
                 title=title,
                 organizer_email=organizer_email,
@@ -435,13 +439,16 @@ class RetrievalService:
                 "title": title,
                 "date": r.payload.get("date"),
                 "transcript_id": r.payload.get("transcript_id"),
+                "document_id": r.payload.get("document_id") if is_document else None,
                 "organizer_email": organizer_email,
                 "chunk_index": r.payload.get("chunk_index"),
                 "speakers": speakers,
                 "source_file": r.payload.get("source_file"),
-                "search_source": r.source,  # "vector", "keyword", or "hybrid"
-                "meeting_category": inferred_category,
-                "category_confidence": category_confidence,
+                "search_source": r.source,  # "vector", "keyword", "hybrid", or "document"
+                "document_source": is_document,  # True if from documents collection
+                "doc_type": "document" if is_document else "meeting",
+                "meeting_category": inferred_category if not is_document else None,
+                "category_confidence": category_confidence if not is_document else None,
             })
 
         return output

@@ -213,10 +213,10 @@ class ConversationService:
         
         logger.info(f"[CONV_SERVICE] Updating conversation {conversation_id} metadata with docs: {merged_doc_ids}")
         
-        # Update conversation
+        # Update conversation - use metadata_ (with underscore) as that's the model attribute name
         await self.conv_repo.update(
             conversation_id,
-            metadata=current_metadata
+            metadata_=current_metadata
         )
         await self.session.commit()
         
@@ -252,9 +252,10 @@ class ConversationService:
         
         logger.info(f"[CONV_SERVICE] Updating conversation {conversation_id} metadata with attachments: {len(new_attachments)} new")
         
+        # Use metadata_ (with underscore) as that's the model attribute name
         await self.conv_repo.update(
             conversation_id,
-            metadata=current_metadata
+            metadata_=current_metadata
         )
         await self.session.commit()
         return True
@@ -293,10 +294,14 @@ class ConversationService:
             await self.session.commit()
             
             # Invalidate caches
+            logger.info(f"[DELETE] Invalidating caches for conversation {conversation_id}, user {user_id}")
+            logger.info(f"[DELETE] conv_cache available: {self.conv_cache is not None}, user_conv_cache available: {self.user_conv_cache is not None}")
             if self.conv_cache:
                 await self.conv_cache.invalidate(conversation_id)
+                logger.info(f"[DELETE] Invalidated conv_cache for {conversation_id}")
             if self.user_conv_cache:
-                await self.user_conv_cache.invalidate(user_id)
+                await self.user_conv_cache.invalidate(str(user_id))
+                logger.info(f"[DELETE] Invalidated user_conv_cache for {user_id}")
             
             logger.info(f"Conversation deleted: {conversation_id}")
         

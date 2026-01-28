@@ -234,11 +234,11 @@ class OllamaEmbeddingClient:
                     raise
             
             # Small delay between batches to prevent overwhelming Ollama
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.1)  # Reduced from 0.3 for faster processing
             
             # Log progress
             processed = min(i + batch_size, len(texts))
-            if processed % 20 == 0 or processed == len(texts):
+            if processed % 50 == 0 or processed == len(texts):
                 logger.debug(f"Embedded {processed}/{len(texts)} texts")
         
         logger.info(f"Successfully embedded {len(embeddings)} texts")

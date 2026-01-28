@@ -269,7 +269,7 @@ class DocumentService:
                 texts.append(enriched_text)
             
             # Use embed_documents() which adds the search_document: prefix for nomic-embed-text
-            vectors = await self.embedder.embed_documents(texts, batch_size=32)  # Increased batch size
+            vectors = await self.embedder.embed_documents(texts, batch_size=48)  # Increased batch size for speed
             vector_size = len(vectors[0])
             
             # 4) Ensure collection exists

@@ -2,7 +2,7 @@
 Conversation schemas.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, AliasChoices
 from typing import Optional, List
 from datetime import datetime
 from enum import Enum
@@ -50,7 +50,8 @@ class ConversationResponse(BaseModel):
     title: Optional[str] = None
     summary: Optional[str] = None
     message_count: int = 0
-    metadata: Optional[dict] = None
+    # Use AliasChoices to accept both explicit 'metadata=' and ORM 'metadata_' attribute
+    metadata: Optional[dict] = Field(None, validation_alias=AliasChoices('metadata', 'metadata_'))
     created_at: datetime
     updated_at: Optional[datetime] = None
     

@@ -683,7 +683,12 @@ Summary:"""
             })
 
     async def _get_full_document_content(self, document_id: str) -> Optional[str]:
-        """Fetch full document content from vector store for inclusion in chat context."""
+        """
+        Fetch full document content for inclusion in chat context.
+        
+        First tries vector store (faster, pre-chunked), then falls back to
+        re-extracting from S3 if document is still processing.
+        """
         try:
             from app.vectorstore.qdrant import QdrantStore
             store = QdrantStore()
@@ -706,28 +711,81 @@ Summary:"""
             
             points = results[0] if results else []
             
-            if not points:
-                logger.warning(f"No chunks found for document {document_id}")
-                return None
+            if points:
+                # Reconstruct full document from chunks in order
+                chunks_by_index = {}
+                for point in points:
+                    payload = point.payload or {}
+                    chunk_index = payload.get("chunk_index", 0)
+                    text = payload.get("text", "")
+                    chunks_by_index[chunk_index] = text
+                
+                # Sort by index and reconstruct
+                sorted_indices = sorted(chunks_by_index.keys())
+                full_text = "\n".join([chunks_by_index[idx] for idx in sorted_indices])
+                
+                logger.info(f"Reconstructed document {document_id}: {len(full_text)} chars from {len(chunks_by_index)} chunks")
+                return full_text
             
-            # Reconstruct full document from chunks in order
-            chunks_by_index = {}
-            for point in points:
-                payload = point.payload or {}
-                chunk_index = payload.get("chunk_index", 0)
-                text = payload.get("text", "")
-                chunks_by_index[chunk_index] = text
-            
-            # Sort by index and reconstruct
-            sorted_indices = sorted(chunks_by_index.keys())
-            full_text = "\n".join([chunks_by_index[idx] for idx in sorted_indices])
-            
-            logger.info(f"Reconstructed document {document_id}: {len(full_text)} chars from {len(chunks_by_index)} chunks")
-            return full_text
+            # Fallback: document might still be processing, try extracting from S3
+            logger.info(f"No chunks found for document {document_id}, attempting S3 extraction fallback")
+            return await self._extract_document_from_s3(document_id)
             
         except Exception as e:
             logger.error(f"Failed to get full document content for {document_id}: {e}")
+            # Try S3 fallback on any error
+            return await self._extract_document_from_s3(document_id)
+    
+    async def _extract_document_from_s3(self, document_id: str) -> Optional[str]:
+        """Extract document content directly from S3 (fallback for processing docs)."""
+        try:
+            from app.services.document_service import DocumentService
+            from app.database.connection import get_db_context
+            
+            async with get_db_context() as session:
+                doc_service = DocumentService(session)
+                
+                # Get document metadata
+                document = await doc_service.repository.get_by_id(document_id)
+                if not document or not document.storage_key:
+                    logger.warning(f"Document {document_id} not found or has no storage key")
+                    return None
+                
+                # Download from S3
+                file_content = await doc_service.download_file(document_id)
+                if not file_content:
+                    logger.warning(f"Could not download document {document_id} from S3")
+                    return None
+                
+                # Extract text
+                extracted = doc_service._extract_text(document, file_content)
+                text = extracted.get("text", "")
+                
+                if text:
+                    logger.info(f"Extracted {len(text)} chars from S3 for document {document_id} (processing fallback)")
+                    return text
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"S3 extraction fallback failed for document {document_id}: {e}")
             return None
+    
+    async def _get_document_title(self, document_id: str) -> str:
+        """Get the title of a document from the database."""
+        try:
+            from app.services.document_service import DocumentService
+            from app.database.connection import get_db_context
+            
+            async with get_db_context() as session:
+                doc_service = DocumentService(session)
+                document = await doc_service.repository.get_by_id(document_id)
+                if document:
+                    return document.title or document.filename or "Uploaded Document"
+                return "Uploaded Document"
+        except Exception as e:
+            logger.error(f"Failed to get document title for {document_id}: {e}")
+            return "Uploaded Document"
 
     async def answer_stream(
         self, 
@@ -854,16 +912,24 @@ Summary:"""
             for doc_id in document_ids:
                 full_content = await self._get_full_document_content(doc_id)
                 if full_content:
+                    # Get document title from database
+                    doc_title = await self._get_document_title(doc_id)
+                    
                     # Add as a high-priority chunk at the beginning
+                    # Use more content - up to 25000 chars to capture more of the document
                     full_doc_chunk = {
-                        "text": full_content[:5000],  # Cap at 5000 chars to avoid overwhelming context
-                        "title": f"Uploaded Document (Full)",
+                        "text": full_content[:25000],
+                        "title": doc_title,
                         "score": 1.0,  # Highest priority
+                        "relevance_score": 100,  # Ensure it shows as 100% relevance
                         "source": "document",
+                        "document_source": True,  # Flag as document for proper formatting
+                        "doc_type": "document",
                         "document_id": doc_id,
+                        "speakers": [],  # Documents don't have speakers
                     }
                     chunks.insert(0, full_doc_chunk)  # Insert at beginning
-                    logger.info(f"[STREAM] Injected full document content ({len(full_content)} chars)")
+                    logger.info(f"[STREAM] Injected full document '{doc_title}' ({len(full_content)} chars, using {min(len(full_content), 25000)} chars)")
                 else:
                     logger.warning(f"[STREAM] Could not retrieve full content for document {doc_id}")
         
@@ -908,15 +974,18 @@ Summary:"""
             source = {
                 "title": c.get("title"),
                 "date": c.get("date"),
-                "transcript_id": c.get("transcript_id"),
+                "transcript_id": c.get("transcript_id") or c.get("document_id"),  # Use document_id if transcript_id is missing
+                "document_id": c.get("document_id"),  # Include document_id for frontend
                 "speakers": c.get("speakers", []),
                 "text": chunk_text,
                 "text_preview": chunk_text,  # Include both for frontend compatibility
-                "relevance_score": normalize_relevance_score(raw_score),  # Normalized 0-100%
+                "relevance_score": c.get("relevance_score") or normalize_relevance_score(raw_score),  # Use pre-set relevance_score if available
                 "relevance_label": get_relevance_label(raw_score),  # Human-readable label
                 "raw_score": round(raw_score, 4),  # Keep raw score for debugging
                 "meeting_category": c.get("meeting_category"),
                 "category_confidence": c.get("category_confidence"),
+                "document_source": c.get("document_source", False),  # Include document flag
+                "doc_type": c.get("doc_type"),
             }
             sources.append(source)
             logger.debug(f"[STREAM] Source: title='{source['title']}', date='{source['date']}', "

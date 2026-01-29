@@ -30,8 +30,15 @@ qdrant_retry = retry(
 class QdrantStore:
     def __init__(self) -> None:
         self.url = settings.QDRANT_URL
+        self.api_key = settings.QDRANT_API_KEY
         logger.info(f"Initializing Qdrant client at {self.url}")
-        self.client = QdrantClient(url=self.url, timeout=30)
+        
+        # Use API key for Qdrant Cloud, skip for local
+        if self.api_key:
+            self.client = QdrantClient(url=self.url, api_key=self.api_key, timeout=30)
+        else:
+            self.client = QdrantClient(url=self.url, timeout=30)
+
 
     @qdrant_retry
     def ensure_collection(self, name: str, vector_size: int) -> None:

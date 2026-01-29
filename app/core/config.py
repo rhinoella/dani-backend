@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     LLM_TEMPERATURE: float = 0.7
 
     QDRANT_URL: str = "http://localhost:6333"
+    QDRANT_API_KEY: Optional[str] = None  # Required for Qdrant Cloud
     QDRANT_COLLECTION_TRANSCRIPTS: str = "meeting_transcripts"
     QDRANT_COLLECTION_DOCUMENTS: str = "documents"
     QDRANT_COLLECTION_EMAIL_STYLES: str = "email_styles"

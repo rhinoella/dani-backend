@@ -16,6 +16,7 @@ dnspython==2.8.0
 docker==7.1.0
 email-validator==2.3.0
 fastapi==0.128.0
+gunicorn>=23.0.0
 filelock==3.20.1
 fsspec==2025.12.0
 google-ai-generativelanguage>=0.6.0

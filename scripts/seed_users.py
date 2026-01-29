@@ -25,7 +25,8 @@ async def seed_user():
     user_id = str(uuid.uuid4())
     email = "mainamanasseh02@gmail.com"
     name = "Manasseh Maina"
-    now = datetime.utcnow()  # Use naive datetime for PostgreSQL
+    google_id = "seed_placeholder_" + str(uuid.uuid4())[:8]  # Placeholder until OAuth login
+    now = datetime.now(timezone.utc).replace(tzinfo=None)  # Use timezone-aware then strip for PG
     
     async with AsyncSessionLocal() as session:
         # Check if user already exists
@@ -39,14 +40,15 @@ async def seed_user():
             print(f"✅ User already exists: {email}")
             return
         
-        # Insert new user (google_id will be set on first OAuth login)
+        # Insert new user with google_id placeholder
         await session.execute(
             text("""
-                INSERT INTO users (id, email, name, created_at, updated_at)
-                VALUES (:id, :email, :name, :created_at, :updated_at)
+                INSERT INTO users (id, google_id, email, name, created_at, updated_at)
+                VALUES (:id, :google_id, :email, :name, :created_at, :updated_at)
             """),
             {
                 "id": user_id,
+                "google_id": google_id,
                 "email": email,
                 "name": name,
                 "created_at": now,

@@ -142,7 +142,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Next.js dev server
         "http://127.0.0.1:3000",
-        "http://34.136.51.101:3000", 
+        "https://dani-frontend.onrender.com"
         "*",  # Allow all origins for flexibility (can restrict in production)
     ],
     allow_credentials=True,

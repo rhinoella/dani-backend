@@ -20,18 +20,17 @@ async def main():
     print("🚀 Initializing Qdrant collections...")
     
     store = QdrantStore()
-    embedder = OllamaEmbeddingClient()
     
-    # Get embedding dimension
-    print("📏 Getting embedding dimension from Ollama...")
-    test_vec = await embedder.embed_one("test")
-    vector_size = len(test_vec)
-    print(f"   Vector size: {vector_size}")
+    # nomic-embed-text produces 768-dimensional vectors
+    # Hardcoded since we can't access local Ollama from Render
+    vector_size = 768
+    print(f"📏 Using vector size: {vector_size} (nomic-embed-text)")
     
     # Create collections
     collections = [
         settings.QDRANT_COLLECTION_TRANSCRIPTS,
         settings.QDRANT_COLLECTION_DOCUMENTS,
+        settings.QDRANT_COLLECTION_EMAIL_STYLES,
     ]
     
     for collection in collections:

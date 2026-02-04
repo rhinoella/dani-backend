@@ -201,6 +201,24 @@ class SpecSchemaResponse(BaseModel):
     metadata: dict
 
 
+class InfographicListItem(BaseModel):
+    """Summary item for infographic listing."""
+    id: str
+    headline: Optional[str] = None
+    style: Optional[str] = None
+    status: str
+    image_url: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class InfographicListResponse(BaseModel):
+    """Response for listing infographics."""
+    items: List[InfographicListItem]
+    total: int
+    limit: int
+    offset: int
+
+
 # ============== Endpoints ==============
 
 @router.get("/styles", response_model=List[StyleInfo])
@@ -304,172 +322,6 @@ async def generate_infographic(
     return result
 
 
-@router.post("/generate/image", responses={200: {"content": {"image/png": {}}}})
-async def generate_infographic_image(
-    req: InfographicRequest,
-    current_user: Optional[User] = Depends(get_optional_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """
-    Generate infographic and return the image directly.
-
-    Returns the PNG image as binary data for direct download/display.
-    The infographic is still persisted to S3 and database.
-    """
-    user_id = current_user.id if current_user else None
-    logger.info(f"[INFOGRAPHIC API] Direct image request: {req.request[:100]}")
-
-    try:
-        style = InfographicStyle(req.style) if req.style else InfographicStyle.MODERN
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid style: {req.style}"
-        )
-
-    service = get_infographic_service()
-    
-    result = await service.generate(
-        request=req.request,
-        topic=req.topic,
-        style=style,
-        doc_type=req.doc_type,
-        width=req.width or 1024,
-        height=req.height or 1024,
-        user_id=user_id,
-        db=db,
-        persist=True,
-    )
-
-    if "error" in result and not result.get("image"):
-        raise HTTPException(status_code=400, detail=result.get("error"))
-
-    image_data = result.get("image")
-    if not image_data:
-        raise HTTPException(
-            status_code=500,
-            detail="Image generation failed - no image data returned"
-        )
-
-    # Decode base64 image
-    try:
-        image_bytes = base64.b64decode(image_data)
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to decode image: {str(e)}"
-        )
-
-    return Response(
-        content=image_bytes,
-        media_type="image/png",
-        headers={
-            "Content-Disposition": f'inline; filename="infographic.png"'
-        }
-    )
-
-
-@router.post("/extract", response_model=StructuredData)
-async def extract_infographic_data(
-    req: InfographicRequest,
-    current_user: Optional[User] = Depends(get_optional_user),
-):
-    """
-    Extract structured infographic data without generating an image.
-
-    Useful for previewing what data would be included in the infographic
-    before committing to image generation.
-    """
-    logger.info(f"[INFOGRAPHIC API] Extract request: {req.request[:100]}")
-
-    service = get_infographic_service()
-    
-    # Use internal method to just extract data
-    from app.schemas.retrieval import MetadataFilter
-    
-    metadata_filter = None
-    if req.doc_type and req.doc_type != "all":
-        metadata_filter = MetadataFilter(
-            doc_type=req.doc_type,
-            speakers=None,
-            source_file=None,
-            date_from=None,
-            date_to=None,
-            transcript_id=None,
-        )
-
-    retrieval_result = await service.retrieval.search_with_confidence(
-        query=req.topic or req.request,
-        limit=8,
-        metadata_filter=metadata_filter,
-    )
-    
-    chunks = retrieval_result["chunks"]
-    if not chunks:
-        raise HTTPException(
-            status_code=404,
-            detail="No relevant context found for extraction"
-        )
-
-    # Format context
-    context_parts = []
-    for chunk in chunks:
-        title = chunk.get("title", "Untitled")
-        text = chunk.get("text", "")
-        date = chunk.get("date")
-        context_parts.append(f"From '{title}' ({date or 'undated'}):\n{text}")
-
-    context = "\n\n---\n\n".join(context_parts)
-
-    # Extract structured data
-    structured = await service._extract_structured_data(context, req.request)
-    
-    if "error" in structured:
-        raise HTTPException(status_code=400, detail=structured["error"])
-
-    return structured
-
-
-@router.post("/generate/spec-schema", response_model=SpecSchemaResponse)
-async def generate_spec_schema(
-    req: InfographicRequest,
-    current_user: Optional[User] = Depends(get_optional_user),
-):
-    """
-    Generate infographic data in PROJECT PLAN spec schema format.
-    
-    Returns the infographic data in the exact format specified in the 
-    project documentation:
-    
-    ```json
-    {
-        "title": "...",
-        "sections": [{"header": "...", "bullets": [...]}],
-        "recommended_visuals": "..."
-    }
-    ```
-    
-    This format is designed for downstream visual generation tools and
-    provides clear structure for presentation/documentation purposes.
-    
-    Also returns the raw structured data and metadata for additional context.
-    """
-    logger.info(f"[INFOGRAPHIC API] Spec schema request: {req.request[:100]}")
-    
-    service = get_infographic_service()
-    
-    result = await service.generate_spec_schema(
-        request=req.request,
-        topic=req.topic,
-        doc_type=req.doc_type,
-    )
-    
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result)
-    
-    return result
-
-
 @router.post("/convert/spec-schema", response_model=SpecSchema)
 async def convert_to_spec_schema(
     structured_data: StructuredData,
@@ -497,24 +349,6 @@ async def convert_to_spec_schema(
 
 
 # ============== Persistence Endpoints ==============
-
-class InfographicListItem(BaseModel):
-    """Summary item for infographic listing."""
-    id: str
-    headline: Optional[str] = None
-    style: Optional[str] = None
-    status: str
-    image_url: Optional[str] = None
-    created_at: Optional[str] = None
-
-
-class InfographicListResponse(BaseModel):
-    """Response for listing infographics."""
-    items: List[InfographicListItem]
-    total: int
-    limit: int
-    offset: int
-
 
 @router.get("/", response_model=InfographicListResponse)
 async def list_infographics(

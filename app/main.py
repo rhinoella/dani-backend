@@ -214,7 +214,6 @@ app.include_router(
 app.include_router(
     infographic_router,
     prefix=settings.API_V1_PREFIX,
-    tags=["Infographic"],
 )
 
 app.include_router(

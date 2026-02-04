@@ -20,6 +20,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create rag_logs table for RAG pipeline analytics."""
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+
+    # Skip if rag_logs table already exists
+    if 'rag_logs' in inspector.get_table_names():
+        return
+
     op.create_table('rag_logs',
         sa.Column('id', sa.UUID(), nullable=False),
         sa.Column('user_id', sa.String(36), nullable=True),

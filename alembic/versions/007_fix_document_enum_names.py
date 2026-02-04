@@ -17,18 +17,27 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     bind = op.get_bind()
-    
+    inspector = sa.inspect(bind)
+
+    # Skip if documents table doesn't exist
+    if 'documents' not in inspector.get_table_names():
+        return
+
+    # Check if migration already applied by checking if document_type exists
+    result = bind.execute(sa.text("SELECT 1 FROM pg_type WHERE typname = 'document_type'"))
+    if result.fetchone() is not None:
+        # Migration already applied
+        return
+
     # 1. Ensure new types exist with correct lowercase values (matching python Enum)
-    # We use a safe block to create them if they don't exist
-    # Note: If they exist with UPPERCASE (from bad script), we might need to drop them first?
-    # To be safe against the manual script I just ran:
+    # Drop and recreate to ensure clean state
     op.execute("DROP TYPE IF EXISTS document_type CASCADE")
     op.execute("DROP TYPE IF EXISTS document_status CASCADE")
-    
+
     op.execute("""
         CREATE TYPE document_type AS ENUM ('pdf', 'docx', 'txt');
     """)
-    
+
     op.execute("""
         CREATE TYPE document_status AS ENUM ('pending', 'processing', 'completed', 'failed');
     """)
@@ -36,23 +45,23 @@ def upgrade() -> None:
     # 2. Convert columns to use the new types
     # First drop defaults to avoid casting errors
     op.execute("ALTER TABLE documents ALTER COLUMN status DROP DEFAULT")
-    
+
     # We cast via text to ensure compatibility
     op.execute("""
-        ALTER TABLE documents 
-        ALTER COLUMN file_type TYPE document_type 
+        ALTER TABLE documents
+        ALTER COLUMN file_type TYPE document_type
         USING lower(file_type::text)::document_type
     """)
-    
+
     op.execute("""
-        ALTER TABLE documents 
-        ALTER COLUMN status TYPE document_status 
+        ALTER TABLE documents
+        ALTER COLUMN status TYPE document_status
         USING lower(status::text)::document_status
     """)
-    
+
     # Restore default with new type
     op.execute("ALTER TABLE documents ALTER COLUMN status SET DEFAULT 'pending'::document_status")
-    
+
     # 3. Drop the old types (originally created as documenttype/documentstatus)
     op.execute("DROP TYPE IF EXISTS documenttype")
     op.execute("DROP TYPE IF EXISTS documentstatus")

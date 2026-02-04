@@ -169,116 +169,175 @@ def upgrade() -> None:
         op.create_index('ix_rag_logs_query_intent', 'rag_logs', ['query_intent'], unique=False)
         op.create_index('ix_rag_logs_success', 'rag_logs', ['success'], unique=False)
         op.create_index(op.f('ix_rag_logs_user_id'), 'rag_logs', ['user_id'], unique=False)
-    op.alter_column('documents', 'user_id',
+
+    # Only alter documents table columns if the table exists and has all expected columns
+    if 'documents' in inspector.get_table_names():
+        columns = {col['name'] for col in inspector.get_columns('documents')}
+
+        # Only add comments to columns that exist
+        if 'user_id' in columns:
+            op.alter_column('documents', 'user_id',
                existing_type=sa.VARCHAR(length=36),
                comment='User who uploaded the document',
                existing_nullable=True)
-    op.alter_column('documents', 'filename',
+        if 'filename' in columns:
+            op.alter_column('documents', 'filename',
                existing_type=sa.VARCHAR(length=500),
                comment='Original filename',
                existing_nullable=False)
-    op.alter_column('documents', 'original_filename',
+        if 'original_filename' in columns:
+            op.alter_column('documents', 'original_filename',
                existing_type=sa.VARCHAR(length=500),
                comment='Original filename uploaded by user',
                existing_nullable=False)
-    op.alter_column('documents', 'file_type',
+        if 'file_type' in columns:
+            op.alter_column('documents', 'file_type',
                existing_type=postgresql.ENUM('pdf', 'docx', 'txt', name='document_type'),
                comment='File type (pdf, docx, txt)',
                existing_nullable=False)
-    op.alter_column('documents', 'file_size',
+        if 'file_size' in columns:
+            op.alter_column('documents', 'file_size',
                existing_type=sa.BIGINT(),
                comment='File size in bytes',
                existing_nullable=False)
-    op.alter_column('documents', 'mime_type',
+        if 'mime_type' in columns:
+            op.alter_column('documents', 'mime_type',
                existing_type=sa.VARCHAR(length=100),
                comment='MIME type of the file',
                existing_nullable=True)
-    op.alter_column('documents', 'storage_key',
+        if 'storage_key' in columns:
+            op.alter_column('documents', 'storage_key',
                existing_type=sa.VARCHAR(length=1000),
                comment='S3 object key for the original file',
                existing_nullable=True)
-    op.alter_column('documents', 'storage_bucket',
+        if 'storage_bucket' in columns:
+            op.alter_column('documents', 'storage_bucket',
                existing_type=sa.VARCHAR(length=100),
                comment='S3 bucket name',
                existing_nullable=True)
-    op.alter_column('documents', 'title',
+        if 'title' in columns:
+            op.alter_column('documents', 'title',
                existing_type=sa.VARCHAR(length=500),
                comment='Document title (extracted or user-provided)',
                existing_nullable=True)
-    op.alter_column('documents', 'description',
+        if 'description' in columns:
+            op.alter_column('documents', 'description',
                existing_type=sa.TEXT(),
                comment='User-provided description',
                existing_nullable=True)
-    op.alter_column('documents', 'status',
+        if 'status' in columns:
+            op.alter_column('documents', 'status',
                existing_type=postgresql.ENUM('pending', 'processing', 'completed', 'failed', name='document_status'),
                comment='Processing status',
                existing_nullable=False,
                existing_server_default=sa.text("'pending'::document_status"))
-    op.alter_column('documents', 'error_message',
+        if 'error_message' in columns:
+            op.alter_column('documents', 'error_message',
                existing_type=sa.TEXT(),
                comment='Error message if processing failed',
                existing_nullable=True)
-    op.alter_column('documents', 'collection_name',
+        if 'collection_name' in columns:
+            op.alter_column('documents', 'collection_name',
                existing_type=sa.VARCHAR(length=100),
                comment='Qdrant collection name where chunks are stored',
                existing_nullable=False,
                existing_server_default=sa.text("'documents'::character varying"))
-    op.alter_column('documents', 'chunk_count',
+        if 'chunk_count' in columns:
+            op.alter_column('documents', 'chunk_count',
                existing_type=sa.INTEGER(),
                comment='Number of chunks created from this document',
                existing_nullable=False,
                existing_server_default=sa.text('0'))
-    op.alter_column('documents', 'total_tokens',
+        if 'total_tokens' in columns:
+            op.alter_column('documents', 'total_tokens',
                existing_type=sa.INTEGER(),
                comment='Total tokens in the document',
                existing_nullable=False,
                existing_server_default=sa.text('0'))
-    op.alter_column('documents', 'metadata',
+        if 'metadata' in columns:
+            op.alter_column('documents', 'metadata',
                existing_type=postgresql.JSONB(astext_type=sa.Text()),
                comment='Additional document metadata (pages, author, etc.)',
                existing_nullable=False,
                existing_server_default=sa.text("'{}'::jsonb"))
-    op.alter_column('documents', 'processed_at',
+        if 'processed_at' in columns:
+            op.alter_column('documents', 'processed_at',
                existing_type=postgresql.TIMESTAMP(timezone=True),
                comment='When processing completed',
                existing_nullable=True)
-    # Rename full_name to name
-    op.alter_column('users', 'full_name', new_column_name='name')
 
-    # Add metadata with default value for existing rows
-    op.add_column('users', sa.Column('metadata', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='Additional user metadata'))
-    op.execute("UPDATE users SET metadata = '{}'::jsonb WHERE metadata IS NULL")
-    op.alter_column('users', 'metadata', nullable=False)
+    # Alter users table only if needed
+    if 'users' in inspector.get_table_names():
+        user_columns = {col['name'] for col in inspector.get_columns('users')}
 
-    op.add_column('users', sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False))
+        # Rename full_name to name if full_name exists and name doesn't
+        if 'full_name' in user_columns and 'name' not in user_columns:
+            op.alter_column('users', 'full_name', new_column_name='name')
+            user_columns.remove('full_name')
+            user_columns.add('name')
 
-    # Rename last_login to last_login_at
-    op.alter_column('users', 'last_login', new_column_name='last_login_at')
+        # Add metadata if it doesn't exist
+        if 'metadata' not in user_columns:
+            op.add_column('users', sa.Column('metadata', postgresql.JSONB(astext_type=sa.Text()), nullable=True, comment='Additional user metadata'))
+            op.execute("UPDATE users SET metadata = '{}'::jsonb WHERE metadata IS NULL")
+            op.alter_column('users', 'metadata', nullable=False)
 
-    # Add is_active with default True for existing rows
-    op.add_column('users', sa.Column('is_active', sa.Boolean(), nullable=True))
-    op.execute("UPDATE users SET is_active = true WHERE is_active IS NULL")
-    op.alter_column('users', 'is_active', nullable=False)
+        # Add updated_at if it doesn't exist
+        if 'updated_at' not in user_columns:
+            op.add_column('users', sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False))
 
-    op.add_column('users', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
-    op.alter_column('users', 'google_id',
-               existing_type=sa.VARCHAR(),
-               nullable=False,
-               comment="Google's 'sub' claim from ID token")
-    op.alter_column('users', 'picture_url',
-               existing_type=sa.VARCHAR(),
-               type_=sa.Text(),
-               comment='Google profile picture URL',
-               existing_nullable=True)
-    op.alter_column('users', 'created_at',
-               existing_type=postgresql.TIMESTAMP(),
-               type_=sa.DateTime(timezone=True),
-               nullable=False,
-               existing_server_default=sa.text('CURRENT_TIMESTAMP'))
-    op.drop_constraint(op.f('users_email_key'), 'users', type_='unique')
-    op.drop_constraint(op.f('users_google_id_key'), 'users', type_='unique')
-    op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
-    op.create_index(op.f('ix_users_google_id'), 'users', ['google_id'], unique=True)
+        # Rename last_login to last_login_at if last_login exists and last_login_at doesn't
+        if 'last_login' in user_columns and 'last_login_at' not in user_columns:
+            op.alter_column('users', 'last_login', new_column_name='last_login_at')
+            user_columns.remove('last_login')
+            user_columns.add('last_login_at')
+
+        # Add is_active if it doesn't exist
+        if 'is_active' not in user_columns:
+            op.add_column('users', sa.Column('is_active', sa.Boolean(), nullable=True))
+            op.execute("UPDATE users SET is_active = true WHERE is_active IS NULL")
+            op.alter_column('users', 'is_active', nullable=False)
+
+        # Add deleted_at if it doesn't exist
+        if 'deleted_at' not in user_columns:
+            op.add_column('users', sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True))
+
+        # Update column properties if they exist
+        if 'google_id' in user_columns:
+            op.alter_column('users', 'google_id',
+                       existing_type=sa.VARCHAR(),
+                       nullable=False,
+                       comment="Google's 'sub' claim from ID token")
+        if 'picture_url' in user_columns:
+            op.alter_column('users', 'picture_url',
+                       existing_type=sa.VARCHAR(),
+                       type_=sa.Text(),
+                       comment='Google profile picture URL',
+                       existing_nullable=True)
+        if 'created_at' in user_columns:
+            op.alter_column('users', 'created_at',
+                       existing_type=postgresql.TIMESTAMP(),
+                       type_=sa.DateTime(timezone=True),
+                       nullable=False,
+                       existing_server_default=sa.text('CURRENT_TIMESTAMP'))
+
+        # Handle constraint changes safely
+        try:
+            op.drop_constraint(op.f('users_email_key'), 'users', type_='unique')
+        except Exception:
+            pass  # Constraint might not exist or already dropped
+
+        try:
+            op.drop_constraint(op.f('users_google_id_key'), 'users', type_='unique')
+        except Exception:
+            pass  # Constraint might not exist or already dropped
+
+        # Create indexes if they don't exist
+        existing_indexes = {idx['name'] for idx in inspector.get_indexes('users')}
+        if 'ix_users_email' not in existing_indexes:
+            op.create_index(op.f('ix_users_email'), 'users', ['email'], unique=True)
+        if 'ix_users_google_id' not in existing_indexes:
+            op.create_index(op.f('ix_users_google_id'), 'users', ['google_id'], unique=True)
     # Columns renamed, not dropped (full_name->name, last_login->last_login_at)
     # ### end Alembic commands ###
 

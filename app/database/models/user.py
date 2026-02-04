@@ -67,7 +67,7 @@ class User(Base):
         nullable=False,
         comment="Additional user metadata",
     )
-    
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -84,7 +84,7 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
-    
+
     # Soft delete
     is_active: Mapped[bool] = mapped_column(
         Boolean,
@@ -122,7 +122,7 @@ class User(Base):
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_login_at": self.last_login_at.isoformat() if self.last_login_at else None,
         }
-    
+
     @property
     def is_deleted(self) -> bool:
         """Check if user is soft deleted."""

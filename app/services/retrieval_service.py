@@ -6,7 +6,7 @@ from hashlib import md5
 from qdrant_client.http import models as qm
 
 from app.vectorstore.qdrant import QdrantStore
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.core.config import settings
 from app.core.metrics import metrics
 from app.schemas.retrieval import MetadataFilter
@@ -37,7 +37,7 @@ class RetrievalService:
 
     def __init__(self) -> None:
         self.store = QdrantStore()
-        self.embedder = OllamaEmbeddingClient()
+        self.embedder = get_embedding_client()
         
         # Semantic cache for embeddings (similarity-based)
         self._embedding_cache = SemanticCache(

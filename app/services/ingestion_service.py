@@ -7,7 +7,7 @@ from qdrant_client.http import models as qm
 
 from app.core.config import settings
 from app.core.metrics import metrics
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.ingestion.pipeline import IngestionPipeline
 from app.ingestion.loaders.fireflies_loader import FirefliesLoader
 from app.vectorstore.qdrant import QdrantStore
@@ -22,7 +22,7 @@ class IngestionService:
         logger.info("Initializing IngestionService")
         self.loader = FirefliesLoader()
         self.pipeline = IngestionPipeline()
-        self.embedder = OllamaEmbeddingClient()
+        self.embedder = get_embedding_client()
         self.store = QdrantStore()
         self.collection = settings.QDRANT_COLLECTION_TRANSCRIPTS
 

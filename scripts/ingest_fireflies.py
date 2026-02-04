@@ -17,7 +17,7 @@ from qdrant_client.http import models as qm
 from app.core.config import settings
 from app.ingestion.loaders.fireflies_loader import FirefliesLoader
 from app.ingestion.chunker import TokenChunker
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.vectorstore.qdrant import QdrantStore
 from app.utils.id_generator import stable_point_id
 
@@ -28,7 +28,7 @@ UPSERT_BATCH = 100  # Upsert to Qdrant every N transcripts
 EMBEDDING_BATCH_SIZE = 8  # Embed this many chunks in parallel (increased from 5)
 
 
-async def embed_chunks_batch(texts: list[str], embedder: OllamaEmbeddingClient) -> list[list[float]]:
+async def embed_chunks_batch(texts: list[str], embedder) -> list[list[float]]:
     """
     Embed all chunks in a single batch call with search_document prefix.
     This is critical for nomic-embed-text asymmetric search to work properly.
@@ -42,7 +42,7 @@ async def main():
     print("📝 Using nomic-embed-text with search_document: prefix for asymmetric search")
 
     loader = FirefliesLoader()
-    embedder = OllamaEmbeddingClient()
+    embedder = get_embedding_client()
     store = QdrantStore()
     # Use optimized chunk settings: 512 tokens, 150 overlap (Project Plan alignment)
     chunker = TokenChunker(chunk_size=512, overlap=150)

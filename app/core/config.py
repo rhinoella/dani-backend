@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     
     LLM_MODEL: str = "ministral-3:8b"
     EMBEDDING_MODEL: str = "nomic-embed-text"
+    EMBEDDING_PROVIDER: str = "openrouter"  # "ollama" or "openrouter"
+    OPENROUTER_API_KEY: Optional[str] = None
     
     LLM_NUM_CTX: int = 8192      # Increased from 4096 for better context
     LLM_NUM_PREDICT: int = 2048
@@ -121,7 +123,7 @@ class Settings(BaseSettings):
     
     ADAPTIVE_RETRIEVAL_ENABLED: bool = True
     ADAPTIVE_MIN_SIMILARITY: float = 0.05  # Lowered for RRF scores (Hybrid Search) which are typically small (0.02-0.15)
-    ADAPTIVE_MAX_CHUNKS: int = 25
+    ADAPTIVE_MAX_CHUNKS: int = 8  # Reduced from 25 to match retrieval limit for consistency
     ADAPTIVE_MIN_CHUNKS: int = 5
     
     RERANKING_ENABLED: bool = True

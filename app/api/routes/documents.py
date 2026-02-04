@@ -91,99 +91,175 @@ async def process_document_background(document_id: str, file_content: bytes):
             logger.error(f"Failed to update document status to FAILED: {update_error}")
 
 
-@router.post("/upload", response_model=DocumentUploadResponse, status_code=status.HTTP_201_CREATED)
-async def upload_document(
+
+
+@router.post("/upload", status_code=status.HTTP_201_CREATED)
+async def upload_documents(
     background_tasks: BackgroundTasks,
-    file: UploadFile = File(..., description="File to upload (PDF, DOCX, or TXT)"),
-    title: Optional[str] = Form(None, max_length=500, description="Document title"),
-    description: Optional[str] = Form(None, max_length=2000, description="Document description"),
+    files: List[UploadFile] = File(..., description="File(s) to upload (PDF, DOCX, or TXT). Can be single or multiple files."),
+    titles: Optional[List[str]] = Form(None, description="Optional titles for each document (must match number of files)"),
+    descriptions: Optional[List[str]] = Form(None, description="Optional descriptions for each document (must match number of files)"),
     service: DocumentService = Depends(get_document_service),
-    current_user: Optional[User] = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
-    Upload a document for processing.
-    
+    Upload one or more documents for processing.
+
+    **Single file upload**: Select 1 file
+    **Multiple files upload**: Select 2-10 files
+
     Supported formats:
     - **PDF**: `.pdf` files up to 50MB
     - **DOCX**: `.docx` files up to 25MB
     - **TXT**: `.txt`, `.md` files up to 10MB
-    
-    The document will be:
+
+    Each document will be:
     1. Validated and stored
     2. Text extracted (Background)
     3. Chunked into segments (Background)
     4. Embedded and stored in vector database (Background)
-    
-    Returns the document ID with status PENDING.
+
+    Returns:
+    - **Single file**: Single document object
+    - **Multiple files**: Array of document objects
+
+    Max 10 files per request. Partial success allowed for multiple files.
     """
-    logger.info(f"Upload request: {file.filename} ({file.content_type})")
-    
-    # Validate content type
-    if file.content_type and file.content_type not in ALLOWED_CONTENT_TYPES:
-        # Also check by extension
-        ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
-        if ext not in [".pdf", ".docx", ".doc", ".txt", ".md", ".markdown", ".text"]:
-            raise HTTPException(
-                status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                detail=f"Unsupported file type: {file.content_type}. Allowed: PDF, DOCX, TXT",
+    # Validate number of files
+    if len(files) > 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum 10 files per upload",
+        )
+
+    # Validate titles and descriptions match file count if provided
+    # If they don't match, ignore them and use defaults
+    if titles and len(titles) != len(files):
+        logger.warning(f"Titles count ({len(titles)}) doesn't match files count ({len(files)}). Ignoring titles.")
+        titles = None
+
+    if descriptions and len(descriptions) != len(files):
+        logger.warning(f"Descriptions count ({len(descriptions)}) doesn't match files count ({len(files)}). Ignoring descriptions.")
+        descriptions = None
+
+    is_single_file = len(files) == 1
+    logger.info(f"Upload request: {len(files)} file(s)")
+
+    results = []
+    errors = []
+
+    for idx, file in enumerate(files):
+        # Get title and description for this file
+        title = titles[idx] if titles else None
+        description = descriptions[idx] if descriptions else None
+
+        try:
+            # Validate content type
+            if file.content_type and file.content_type not in ALLOWED_CONTENT_TYPES:
+                ext = "." + file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else ""
+                if ext not in [".pdf", ".docx", ".doc", ".txt", ".md", ".markdown", ".text"]:
+                    error_msg = f"Unsupported file type: {file.content_type}. Allowed: PDF, DOCX, TXT"
+                    if is_single_file:
+                        raise HTTPException(
+                            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+                            detail=error_msg,
+                        )
+                    errors.append({"filename": file.filename, "error": error_msg})
+                    continue
+
+            # Read file content
+            try:
+                file_content = await file.read()
+            except Exception as e:
+                logger.error(f"Failed to read file {file.filename}: {e}")
+                error_msg = "Failed to read file"
+                if is_single_file:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=error_msg,
+                    )
+                errors.append({"filename": file.filename, "error": error_msg})
+                continue
+
+            # Check file size
+            if len(file_content) > MAX_UPLOAD_SIZE:
+                error_msg = f"File too large: {len(file_content) / (1024*1024):.1f}MB (max: 50MB)"
+                if is_single_file:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=error_msg,
+                    )
+                errors.append({"filename": file.filename, "error": error_msg})
+                continue
+
+            # Check for empty file
+            if len(file_content) == 0:
+                error_msg = "File is empty"
+                if is_single_file:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=error_msg,
+                    )
+                errors.append({"filename": file.filename, "error": error_msg})
+                continue
+
+            # Process upload
+            result = await service.upload_document(
+                filename=file.filename,
+                file_content=file_content,
+                content_type=file.content_type,
+                title=title,
+                description=description,
+                user_id=current_user.id,
             )
-    
-    # Read file content
-    try:
-        file_content = await file.read()
-    except Exception as e:
-        logger.error(f"Failed to read uploaded file: {e}")
+
+            # Schedule processing in background
+            background_tasks.add_task(
+                process_document_background,
+                result.id,
+                file_content
+            )
+
+            results.append(result)
+            logger.info(f"Upload [{idx+1}/{len(files)}]: {file.filename} -> {result.id}")
+
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions for single file uploads
+        except ValueError as e:
+            logger.warning(f"Document upload validation failed for {file.filename}: {e}")
+            error_msg = str(e)
+            if is_single_file:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=error_msg,
+                )
+            errors.append({"filename": file.filename, "error": error_msg})
+        except Exception as e:
+            logger.error(f"Failed to upload {file.filename}: {e}", exc_info=True)
+            error_msg = "Failed to process document"
+            if is_single_file:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=error_msg,
+                )
+            errors.append({"filename": file.filename, "error": str(e)})
+
+    # Log errors for multiple file uploads
+    if errors and not is_single_file:
+        logger.warning(f"Upload completed with {len(errors)} error(s): {errors}")
+
+    # Check if all uploads failed
+    if not results:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to read uploaded file",
+            detail=f"All uploads failed. Errors: {errors}",
         )
-    
-    # Check file size
-    if len(file_content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large: {len(file_content) / (1024*1024):.1f}MB (max: 50MB)",
-        )
-    
-    # Check for empty file
-    if len(file_content) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="File is empty",
-        )
-    
-    # Process upload
-    try:
-        # 1. Store file and create DB record (PENDING)
-        result = await service.upload_document(
-            filename=file.filename,
-            file_content=file_content,
-            content_type=file.content_type,
-            title=title,
-            description=description,
-            user_id=current_user.id if current_user else None,
-        )
-        
-        # 2. Schedule processing in background
-        background_tasks.add_task(
-            process_document_background, 
-            result.id, 
-            file_content
-        )
-        
-        return result
-    except ValueError as e:
-        logger.warning(f"Document upload validation failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
-    except Exception as e:
-        logger.error(f"Document upload failed: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to process document",
-        )
+
+    # Return single object for single file, array for multiple files
+    if is_single_file:
+        return results[0]
+    else:
+        return results
 
 
 @router.get("", response_model=DocumentListResponse)
@@ -289,7 +365,7 @@ async def update_document(
     document_id: str,
     update_data: DocumentUpdateRequest,
     service: DocumentService = Depends(get_document_service),
-    current_user: Optional[User] = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Update document metadata (title, description).
@@ -336,7 +412,7 @@ async def update_document(
 async def delete_document(
     document_id: str,
     service: DocumentService = Depends(get_document_service),
-    current_user: Optional[User] = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Delete a document and its chunks.
@@ -365,7 +441,7 @@ async def delete_document(
 async def reprocess_document(
     document_id: str,
     service: DocumentService = Depends(get_document_service),
-    current_user: Optional[User] = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Re-process an existing document.

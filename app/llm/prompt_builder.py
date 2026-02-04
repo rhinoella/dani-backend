@@ -115,12 +115,13 @@ class PromptBuilder:
 IMPORTANT INSTRUCTIONS:
 - FOCUS ON THE CURRENT QUESTION: Answer based ONLY on the KNOWLEDGE BASE SOURCES provided above that are relevant to the current question.
 - TOPIC SWITCHING: If the user asks about a NEW topic (different from conversation history), focus ENTIRELY on the new topic. Do NOT reference or blend in information from previous topics discussed in the conversation.
+- ANSWER CONFIDENTLY: If the sources contain relevant information, answer directly and confidently without hedging or disclaimers.
 - When referencing meeting information, use natural language (e.g., "In the discussion with [Company/Person]...", "During the [Meeting Title]...").
 - When referencing document information, cite the document name (e.g., "According to the [Document Name]...", "The document states...").
-- If the sources don't contain enough information to answer, say "I don't have enough information about this in the available content"
+- ONLY if the sources contain NO relevant information at all, say "I don't have enough information about this in the available content"
 - Do NOT make up information that isn't in the sources
-- RESPONSE FORMAT: Write in PLAIN TEXT paragraphs only. DO NOT use markdown, bullet points, or lists.
-- Explain discussions in detail with a narrative flow. Provide comprehensive answers that fully address the question.
+- RESPONSE FORMAT: Use MARKDOWN formatting for better readability. Use **bold** for emphasis, bullet points for lists, headers (##, ###) for sections, and > blockquotes for direct quotes.
+- Explain discussions in detail with structured markdown formatting. Combine narrative flow with clear formatting for maximum clarity.
 - CONVERSATION HISTORY is provided only for context (to understand pronouns like "it", "they", follow-up questions). It is NOT a source of information - use only the KNOWLEDGE BASE SOURCES above."""
 
         # Format conversation history if provided (limit to last 4 exchanges - reduced to avoid topic bleeding)

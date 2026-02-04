@@ -7,13 +7,13 @@ import sys
 sys.path.append(os.getcwd())
 
 from app.core.config import settings
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.vectorstore.qdrant import QdrantStore
 
 async def main():
     print(f"Checking Qdrant URL: {settings.QDRANT_URL}")
     store = QdrantStore()
-    embedder = OllamaEmbeddingClient()
+    embedder = get_embedding_client()
     
     query_text = "somatosensory"
     print(f"\nSearching for '{query_text}' in 'documents' collection...")

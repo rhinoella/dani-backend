@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.core.config import settings
 from app.vectorstore.qdrant import QdrantStore
 from app.services.ingestion_service import IngestionService
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.ingestion.pipeline import IngestionPipeline
 from app.ingestion.loaders.fireflies_loader import FirefliesLoader
 
@@ -51,7 +51,7 @@ async def check_ollama_connection():
     """Verify Ollama is running and embedding model is available."""
     print("🔍 Checking Ollama connection...")
     
-    embedder = OllamaEmbeddingClient()
+    embedder = get_embedding_client()
     try:
         # Test embedding with the document prefix
         test_embedding = await embedder.embed_document("Test document content")

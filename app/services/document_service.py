@@ -29,7 +29,7 @@ from app.ingestion.loaders.pdf_loader import PDFLoader
 from app.ingestion.loaders.docx_loader import DOCXLoader
 from app.ingestion.loaders.txt_loader import TXTLoader
 from app.ingestion.chunker import TokenChunker
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.vectorstore.qdrant import QdrantStore
 from app.services.storage_service import StorageService, get_storage_service
 from app.utils.id_generator import stable_point_id
@@ -92,7 +92,7 @@ class DocumentService:
         
         # Processing components
         self.chunker = TokenChunker(chunk_size=400, overlap=100)  # Match transcript chunking
-        self.embedder = OllamaEmbeddingClient()
+        self.embedder = get_embedding_client()
         self.store = QdrantStore()
         self.collection = settings.QDRANT_COLLECTION_DOCUMENTS
         

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Score normalization constants
 # nomic-embed-text with proper prefixes produces scores in 0.10-0.40 range
 SCORE_MIN_EXPECTED = 0.02  # Lowered for RRF scores (Hybrid Search)
-SCORE_MAX_EXPECTED = 0.25  # Lowered for RRF scores
+SCORE_MAX_EXPECTED = 0.35  # Raised from 0.25 to prevent all scores showing as 100%
 
 
 def normalize_relevance_score(raw_score: float) -> float:
@@ -93,6 +93,35 @@ class QueryProcessor:
     Processes and optimizes queries for better retrieval.
     """
     
+    # Casual conversation patterns (greetings, small talk, end-of-conversation)
+    # These patterns detect when user is just being polite or ending conversation
+    # and doesn't need document retrieval
+    CASUAL_PATTERNS = [
+        # Greetings (start of conversation)
+        r"^(hi|hello|hey|hiya|howdy|greetings)(\s|[,!.]|$)",
+        r"^(good\s+(morning|afternoon|evening|day))(\s|[,!.]|$)",
+        r"^(how\s+are\s+you|how's\s+it\s+going|how\s+do\s+you\s+do|what's\s+up|sup|wassup)(\s|[,!?.]|$)",
+        r"^(nice\s+to\s+meet\s+you|pleased\s+to\s+meet\s+you)(\s|[,!.]|$)",
+
+        # Thank you patterns (can appear anywhere in message)
+        r"(^|\s)(thanks|thank\s+you|thx|ty|tysm|thank\s+u|thanx)(\s|[,!.]|$)",
+        r"(^|\s)(appreciate(\s+it|\s+your|\s+you)?|much\s+appreciated|thanks\s+a\s+lot|thanks\s+so\s+much)(\s|[,!.]|$)",
+        r"(^|\s)(you're\s+helpful|that's\s+helpful|this\s+helps?|very\s+helpful)(\s|[,!.]|$)",
+
+        # Goodbye/farewell (end of conversation)
+        r"(^|\s)(bye|goodbye|see\s+you|see\s+ya|farewell|take\s+care|cya|ttyl)(\s|[,!.]|$)",
+        r"(^|\s)(have\s+a\s+(good|great|nice)\s+(day|night|one|time))(\s|[,!.]|$)",
+        r"(^|\s)(catch\s+you\s+later|talk\s+to\s+you\s+later|see\s+you\s+(later|soon|tomorrow))(\s|[,!.]|$)",
+
+        # Acknowledgments (simple responses)
+        r"^(ok|okay|alright|sure|got\s+it|understood|cool|perfect|great|awesome|nice)(\s|[,!.]|$)",
+        r"^(yes|yeah|yep|yup|no|nope|nah)(\s|[,!.]|$)",
+
+        # Satisfaction/completion indicators
+        r"(^|\s)(that's\s+all|that's\s+it|nothing\s+else|i'm\s+good|i'm\s+done|all\s+set)(\s|[,!.]|$)",
+        r"(^|\s)(no\s+more\s+questions?|that\s+answers?\s+(it|my\s+question))(\s|[,!.]|$)",
+    ]
+
     # Intent patterns
     INTENT_PATTERNS = {
         "summary": [
@@ -116,10 +145,11 @@ class QueryProcessor:
             r"what are|what is|what were|what was",
         ],
         "person_search": [
-            r"(what did|did)\s+(he|she|they|you|i)\s+(say|mention|discuss|talk about)",
-            r"\b(john|jane|mary|david|sarah|mark|paul|lisa|chris|mike|anna|emma|olivia|noah|liam|oliver|elijah|william|james)\b.*(say|mention|think|believe|opinion)",
-            r"(from|by|according to)\s+(him|her|them|john|jane|mary|david|sarah)",
+            r"(what did|did)\s+(\w+)\s+(say|mention|discuss|talk about)",  # Catches "what did [NAME] say"
+            r"\b(john|jane|mary|david|sarah|mark|paul|lisa|chris|mike|anna|emma|olivia|noah|liam|oliver|elijah|william|james|alice|bob|charlie)\b.*(say|mention|think|believe|opinion)",
+            r"(from|by|according to)\s+(\w+)",  # More flexible - catches any name after "according to"
             r"\w+'s\s+(thoughts|opinion|view|perspective|comments|feedback)",
+            r"who\s+(said|mentioned|discussed|talked about)",  # "who said" queries
         ],
         "comparison": [
             r"compare|comparison|versus|vs\.?|difference",
@@ -163,6 +193,64 @@ class QueryProcessor:
             for intent, patterns in self.INTENT_PATTERNS.items()
         }
         self._time_compiled = [re.compile(p, re.IGNORECASE) for p in self.TIME_PATTERNS]
+        self._casual_compiled = [re.compile(p, re.IGNORECASE) for p in self.CASUAL_PATTERNS]
+
+    def is_casual_conversation(self, query: str) -> bool:
+        """
+        Detect if query is casual conversation (greeting, thank you, goodbye, acknowledgment)
+        rather than a substantive document query.
+
+        This handles:
+        - Greetings: "Hello", "Hi there", "Good morning"
+        - Thank you: "Thanks", "Thank you so much", "I appreciate it"
+        - Goodbyes: "Bye", "See you later", "Have a great day"
+        - Acknowledgments: "Ok", "Got it", "Perfect"
+        - End signals: "That's all", "Nothing else", "I'm good"
+
+        Args:
+            query: User query
+
+        Returns:
+            True if this is casual conversation, False if it's a substantive query
+        """
+        query_stripped = query.strip()
+
+        # Check if entire query matches casual patterns
+        for pattern in self._casual_compiled:
+            if pattern.search(query_stripped):
+                # Found a casual pattern - but need to check if it's a substantive query too
+                # If query is short (<50 chars), likely just casual
+                if len(query_stripped) < 50:
+                    return True
+
+                # For longer queries, check if there are question words indicating real query
+                question_indicators = [
+                    'what', 'when', 'where', 'who', 'why', 'how',
+                    'which', 'show', 'tell', 'explain', 'find', 'search',
+                    'list', 'give me', 'can you', 'could you'
+                ]
+
+                query_lower = query_stripped.lower()
+                has_question = any(word in query_lower for word in question_indicators)
+
+                # If it has question indicators, it's a real query despite casual elements
+                # e.g., "Thanks! But can you also tell me about the meeting?"
+                if has_question:
+                    # But if it's ONLY thanks/bye with no real content, still casual
+                    # Remove casual parts and see what's left
+                    query_without_casual = query_lower
+                    for casual_word in ['thank', 'thanks', 'bye', 'hello', 'hi', 'hey']:
+                        query_without_casual = query_without_casual.replace(casual_word, '')
+
+                    # If less than 15 chars left after removing casual words, treat as casual
+                    if len(query_without_casual.strip()) < 15:
+                        return True
+                    return False
+
+                # No question indicators in longer query with casual pattern = casual
+                return True
+
+        return False
     
     def detect_intent(self, query: str) -> QueryIntent:
         """

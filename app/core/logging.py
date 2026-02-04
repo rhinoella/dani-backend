@@ -27,6 +27,9 @@ def setup_logging(level: Optional[str] = None) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("qdrant_client").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("botocore").setLevel(logging.WARNING)
+    logging.getLogger("boto3").setLevel(logging.WARNING)
     
     # App loggers at configured level
     logging.getLogger("app").setLevel(log_level)

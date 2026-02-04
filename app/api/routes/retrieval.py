@@ -3,7 +3,7 @@ from qdrant_client.http import models as qm
 from typing import Optional, List
 
 from app.core.config import settings
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.vectorstore.qdrant import QdrantStore
 from app.services.retrieval_service import RetrievalService
 from app.schemas.retrieval import (
@@ -16,7 +16,7 @@ from app.schemas.retrieval import (
 router = APIRouter(prefix="/retrieval", tags=["Retrieval"])
 
 store = QdrantStore()
-embedder = OllamaEmbeddingClient()
+embedder = get_embedding_client()
 retrieval_service = RetrievalService()  # Enhanced retrieval service
 collection = settings.QDRANT_COLLECTION_TRANSCRIPTS
 

@@ -118,9 +118,9 @@ app = FastAPI(
     title=settings.APP_NAME,
     debug=settings.DEBUG,
     lifespan=lifespan,
-    docs_url="/docs" if settings.ENV == "development" else None,
-    redoc_url="/redoc" if settings.ENV == "development" else None,
-    openapi_url="/openapi.json" if settings.ENV == "development" else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
 # Register custom exception handlers for standardized error responses

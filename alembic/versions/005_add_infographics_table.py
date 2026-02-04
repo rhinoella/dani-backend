@@ -21,15 +21,32 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     """Create infographics table for storing generated infographic metadata."""
 
-    # Create enum types (IF NOT EXISTS to make it idempotent)
-    op.execute("CREATE TYPE IF NOT EXISTS infographic_style AS ENUM ('modern', 'corporate', 'minimal', 'vibrant', 'dark')")
-    op.execute("CREATE TYPE IF NOT EXISTS infographic_status AS ENUM ('pending', 'generating', 'completed', 'failed')")
-
-    # Check if table already exists before creating
     conn = op.get_bind()
     inspector = sa.inspect(conn)
+
+    # Check if table already exists before creating
     if 'infographics' in inspector.get_table_names():
         return
+
+    # Create enum types only if they don't exist (idempotent)
+    # Using DO $$ block to handle the IF NOT EXISTS logic properly
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'infographic_style') THEN
+                CREATE TYPE infographic_style AS ENUM ('modern', 'corporate', 'minimal', 'vibrant', 'dark');
+            END IF;
+        END $$;
+    """)
+
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'infographic_status') THEN
+                CREATE TYPE infographic_status AS ENUM ('pending', 'generating', 'completed', 'failed');
+            END IF;
+        END $$;
+    """)
 
     op.create_table('infographics',
         # Primary key

@@ -24,7 +24,13 @@ def upgrade() -> None:
     # Create enum types (IF NOT EXISTS to make it idempotent)
     op.execute("CREATE TYPE IF NOT EXISTS infographic_style AS ENUM ('modern', 'corporate', 'minimal', 'vibrant', 'dark')")
     op.execute("CREATE TYPE IF NOT EXISTS infographic_status AS ENUM ('pending', 'generating', 'completed', 'failed')")
-    
+
+    # Check if table already exists before creating
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    if 'infographics' in inspector.get_table_names():
+        return
+
     op.create_table('infographics',
         # Primary key
         sa.Column('id', sa.String(36), nullable=False),

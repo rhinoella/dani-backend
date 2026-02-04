@@ -23,6 +23,7 @@ from app.api.deps import (
 )
 from app.database.models import User
 from app.cache.conversation_cache import ConversationCache, UserConversationsCache
+from app.schemas.chat import FeedbackRequest, FeedbackResponse
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -79,17 +80,18 @@ def get_chat_service() -> ChatService:
 async def chat(
     req: ChatRequest,
     db: AsyncSession = Depends(get_db),
-    current_user: Optional[User] = Depends(get_optional_user),
+    current_user: User = Depends(get_current_user),
     conv_cache: Optional[ConversationCache] = Depends(get_conversation_cache),
     user_conv_cache: Optional[UserConversationsCache] = Depends(get_user_conversations_cache),
 ):
     """
-    Answer a user query using RAG. 
-    
-    - If authenticated with conversation_id: continues existing conversation with memory
-    - If authenticated without conversation_id: creates new conversation
-    - If not authenticated: works without conversation storage
-    
+    Answer a user query using RAG.
+
+    Requires authentication.
+
+    - With conversation_id: continues existing conversation with memory
+    - Without conversation_id: creates new conversation
+
     Set stream=true for faster perceived response.
     """
     # Inject conversation cache into chat service for auto-loading
@@ -650,5 +652,77 @@ async def chat_trace(req: ChatRequest):
         raise HTTPException(
             status_code=500,
             detail="An unexpected error occurred. Please try again."
+        )
+
+
+@router.post("/feedback", response_model=FeedbackResponse)
+async def submit_feedback(
+    request: FeedbackRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+):
+    """
+    Submit feedback (upvote/downvote) for a chat message.
+
+    - **message_id**: The ID of the assistant message to rate
+    - **rating**: 1 for upvote, -1 for downvote, 0 for neutral
+    - **feedback**: Optional text feedback explaining the rating
+
+    Returns success status and the stored rating.
+    """
+    try:
+        from app.repositories.message_repository import MessageRepository
+        from datetime import datetime
+
+        msg_repo = MessageRepository(db)
+
+        # Get the message
+        message = await msg_repo.get_by_id(request.message_id)
+
+        if not message:
+            raise HTTPException(
+                status_code=404,
+                detail="Message not found"
+            )
+
+        # Verify user has access (if authenticated)
+        if current_user and message.conversation_id:
+            conv_service = ConversationService(db, None, None)
+            conversation = await conv_service.get_conversation(
+                message.conversation_id,
+                current_user.id
+            )
+            if not conversation:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Access denied"
+                )
+
+        # Update message metadata with feedback
+        metadata = message.metadata_ or {}
+        metadata["user_rating"] = request.rating
+        metadata["user_feedback"] = request.feedback
+        metadata["feedback_at"] = datetime.utcnow().isoformat()
+
+        # Update in database
+        await msg_repo.update(request.message_id, metadata_=metadata)
+        await db.commit()
+
+        logger.info(f"Feedback submitted for message {request.message_id}: rating={request.rating}")
+
+        return FeedbackResponse(
+            success=True,
+            message="Feedback submitted successfully",
+            message_id=request.message_id,
+            rating=request.rating,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to submit feedback: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to submit feedback"
         )
 

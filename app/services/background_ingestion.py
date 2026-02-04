@@ -24,7 +24,7 @@ from qdrant_client.http import models as qm
 from app.core.config import settings
 from app.ingestion.loaders.fireflies_loader import FirefliesLoader
 from app.ingestion.chunker import TokenChunker
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.vectorstore.qdrant import QdrantStore
 from app.utils.id_generator import stable_point_id
 
@@ -148,7 +148,7 @@ class BackgroundIngestionService:
     
     def __init__(self):
         self.loader = FirefliesLoader()
-        self.embedder = OllamaEmbeddingClient()
+        self.embedder = get_embedding_client()
         self.store = QdrantStore()
         self.chunker = TokenChunker(chunk_size=512, overlap=64)
         self.progress = IngestionProgress()

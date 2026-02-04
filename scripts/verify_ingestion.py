@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from qdrant_client import QdrantClient
 from app.core.config import settings
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 
 
 def check_mark(passed: bool) -> str:
@@ -32,7 +32,7 @@ async def verify_ingestion():
     host, port = qdrant_url.split(":") if ":" in qdrant_url else (qdrant_url, 6333)
     
     client = QdrantClient(host=host, port=int(port))
-    embedder = OllamaEmbeddingClient()
+    embedder = get_embedding_client()
     
     all_passed = True
     

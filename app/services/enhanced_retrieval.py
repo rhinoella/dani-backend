@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
 
 from app.llm.ollama import OllamaClient
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)

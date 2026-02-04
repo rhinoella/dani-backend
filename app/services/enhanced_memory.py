@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.repositories.conversation_repository import ConversationRepository
 from app.repositories.message_repository import MessageRepository
 from app.cache.conversation_cache import ConversationCache
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.llm.ollama import OllamaClient
 from app.core.config import settings
 
@@ -47,8 +47,8 @@ class SemanticMemorySearch:
     this finds relevant messages even if they're not recent.
     """
     
-    def __init__(self, embedder: Optional[OllamaEmbeddingClient] = None):
-        self.embedder = embedder or OllamaEmbeddingClient()
+    def __init__(self, embedder=None):
+        self.embedder = embedder or get_embedding_client()
     
     async def search_messages(
         self,

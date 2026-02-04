@@ -303,6 +303,25 @@ Summary:"""
                 "valid_formats": ["summary", "decisions", "tasks", "insights", "email", "whatsapp", "slides", "infographic"],
             }
 
+        # Check for casual conversation (greetings, small talk)
+        from app.utils.query_processor import QueryProcessor
+        query_processor = QueryProcessor()
+        if query_processor.is_casual_conversation(query):
+            # Respond naturally to greetings without searching documents
+            casual_responses = [
+                "Hello! I'm DANI, your document analysis assistant. I can help you search through your documents and meeting transcripts. What would you like to know?",
+                "Hi there! I'm here to help you find information from your documents and meetings. What can I help you with today?",
+                "Hey! I'm DANI. I can answer questions about your uploaded documents and meeting transcripts. How can I assist you?",
+            ]
+            import random
+            return {
+                "answer": random.choice(casual_responses),
+                "sources": [],
+                "output_format": output_format,
+                "confidence": {"score": 1.0, "level": "high"},
+                **({"debug": {"casual_conversation": True}} if verbose else {}),
+            }
+
         # 0️⃣ Query rewriting for follow-up queries
         retrieval_query = query
         rewrite_info = None
@@ -330,8 +349,8 @@ Summary:"""
                 )
             
             retrieval_result = await self.retrieval.search_with_confidence(
-                query=retrieval_query, 
-                limit=25,
+                query=retrieval_query,
+                limit=8,  # Reduced from 25 to 8 for better quality and faster responses
                 metadata_filter=metadata_filter,
             )
             chunks = retrieval_result["chunks"]
@@ -493,6 +512,7 @@ Summary:"""
         negative_phrases = [
             "i don't have a record",
             "i don't have any record",
+            "i don't have enough",
             "i cannot find",
             "i couldn't find",
             "no information found",
@@ -500,8 +520,10 @@ Summary:"""
             "does not mention",
             "i'm sorry, but i don't have",
             "i am sorry, but i don't have",
+            "i don't have information",
+            "i don't have that",
         ]
-        
+
         is_negative = any(phrase in answer.lower() for phrase in negative_phrases)
 
         # Build sources with enhanced attribution
@@ -911,8 +933,8 @@ Summary:"""
             )
         
         retrieval_result = await self.retrieval.search_with_confidence(
-            query=retrieval_query, 
-            limit=25,
+            query=retrieval_query,
+            limit=8,  # Reduced from 25 to 8 for better quality and faster responses
             metadata_filter=metadata_filter,
         )
         chunks = retrieval_result["chunks"]
@@ -922,7 +944,7 @@ Summary:"""
         
         logger.info(f"[STREAM] Retrieval completed in {retrieval_time_ms}ms, found {len(chunks)} chunks")
         logger.info(f"[STREAM] Confidence: {confidence}")
-        
+
         # 🔄 If specific documents were uploaded, inject their full content as context
         if document_ids:
             logger.info(f"[STREAM] Injecting full content for {len(document_ids)} uploaded documents")
@@ -931,7 +953,7 @@ Summary:"""
                 if full_content:
                     # Get document title from database
                     doc_title = await self._get_document_title(doc_id)
-                    
+
                     # Add as a high-priority chunk at the beginning
                     # Use more content - up to 25000 chars to capture more of the document
                     full_doc_chunk = {
@@ -949,22 +971,22 @@ Summary:"""
                     logger.info(f"[STREAM] Injected full document '{doc_title}' ({len(full_content)} chars, using {min(len(full_content), 25000)} chars)")
                 else:
                     logger.warning(f"[STREAM] Could not retrieve full content for document {doc_id}")
-        
+
         if not chunks:
             logger.info(f"[STREAM] No chunks found, returning default response")
             yield json.dumps({"type": "answer", "content": "I don't have a record of that discussion."})
             return
-        
+
         # Log chunk details
         for i, chunk in enumerate(chunks):
             logger.info(f"[STREAM] Chunk {i+1}: title='{chunk.get('title', 'N/A')}', "
                        f"score={chunk.get('score', 0):.3f}, "
                        f"text_preview='{chunk.get('text', '')[:80]}...'")
-        
-        # 2️⃣ Send sources first (immediate feedback)
+
+        # 2️⃣ Build sources (but don't send yet - wait to see if answer is negative)
         sources = []
         seen_chunks = set()
-        
+
         # Normalize scores for display: map raw scores to 0-100% scale
         # Raw cosine similarity for conversational text is often low (0.05-0.30)
         # We scale to make top result ~90% and lowest ~50% for retrieved results
@@ -972,13 +994,13 @@ Summary:"""
         max_score = max(raw_scores) if raw_scores else 1
         min_score = min(raw_scores) if raw_scores else 0
         score_range = max_score - min_score if max_score != min_score else 1
-        
+
         for c in chunks:
             chunk_text = c.get("text", "")
             if chunk_text in seen_chunks:
                 continue
             seen_chunks.add(chunk_text)
-            
+
             # Normalize score: top results get ~85-95%, lower results get ~50-70%
             raw_score = c.get("score", 0)
             if score_range > 0 and max_score > 0:
@@ -987,7 +1009,7 @@ Summary:"""
             else:
                 # If all scores are same, use a default based on raw score
                 normalized_score = min(0.90, max(0.50, raw_score * 3))
-            
+
             source = {
                 "title": c.get("title"),
                 "date": c.get("date"),
@@ -1008,32 +1030,100 @@ Summary:"""
             logger.debug(f"[STREAM] Source: title='{source['title']}', date='{source['date']}', "
                         f"transcript_id='{source['transcript_id']}', speakers={source['speakers']}, "
                         f"relevance_score={source['relevance_score']} (raw={source['raw_score']})")
-        
-        logger.info(f"[STREAM] Sending {len(sources)} sources to client")
-        if sources:
-            logger.info(f"[STREAM] First source sample: {sources[0]}")
-        yield json.dumps({"type": "sources", "content": sources})
-        
+
+        logger.info(f"[STREAM] Prepared {len(sources)} potential sources")
+
         # 3️⃣ Build prompt with output format instructions AND conversation history
         prompt_start = time.time()
         prompt = self.prompt_builder.build_chat_prompt(
-            query, 
-            chunks, 
+            query,
+            chunks,
             output_format=output_format,
             conversation_history=conversation_history,
         )
         prompt_time_ms = round((time.time() - prompt_start) * 1000, 2)
         logger.info(f"[STREAM] Prompt built in {prompt_time_ms}ms, length={len(prompt)} chars")
-        
-        # 4️⃣ Stream LLM response
+
+        # 4️⃣ Generate and buffer answer to check if it's negative
         generation_start = time.time()
         token_count = 0
+        buffered_answer = ""
+
+        # Buffer tokens to check for negative response
         async for token in self.llm.generate_stream(prompt):
             token_count += 1
-            # Aggressive markdown stripping to ensure plain text
-            clean_token = token.replace('*', '').replace('#', '').replace('`', '')
-            if clean_token:
-                yield json.dumps({"type": "token", "content": clean_token})
+            buffered_answer += token
+
+            # Once we have ~50 tokens, check if answer is negative
+            if token_count == 50:
+                # Check for negative phrases early
+                negative_phrases = [
+                    "i don't have a record",
+                    "i don't have any record",
+                    "i don't have enough",
+                    "i cannot find",
+                    "i couldn't find",
+                    "no information found",
+                    "doesn't mention",
+                    "does not mention",
+                    "i'm sorry, but i don't have",
+                    "i am sorry, but i don't have",
+                    "i don't have information",
+                    "i don't have that",
+                ]
+
+                is_negative = any(phrase in buffered_answer.lower() for phrase in negative_phrases)
+
+                if is_negative:
+                    logger.info(f"[STREAM] Detected negative answer, not sending sources")
+                    # Send empty sources
+                    yield json.dumps({"type": "sources", "content": []})
+                else:
+                    logger.info(f"[STREAM] Positive answer detected, sending {len(sources)} sources")
+                    # Send sources
+                    yield json.dumps({"type": "sources", "content": sources})
+
+                # Now stream the buffered tokens
+                for buffered_token in buffered_answer:
+                    clean_token = buffered_token.replace('*', '').replace('#', '').replace('`', '')
+                    if clean_token:
+                        yield json.dumps({"type": "token", "content": clean_token})
+
+                # Continue streaming remaining tokens
+                continue
+
+        # If we have less than 50 tokens, still need to send sources and stream answer
+        if token_count < 50:
+            # Check the full buffered answer
+            negative_phrases = [
+                "i don't have a record",
+                "i don't have any record",
+                "i don't have enough",
+                "i cannot find",
+                "i couldn't find",
+                "no information found",
+                "doesn't mention",
+                "does not mention",
+                "i'm sorry, but i don't have",
+                "i am sorry, but i don't have",
+                "i don't have information",
+                "i don't have that",
+            ]
+
+            is_negative = any(phrase in buffered_answer.lower() for phrase in negative_phrases)
+
+            if is_negative:
+                logger.info(f"[STREAM] Detected negative answer (short response), not sending sources")
+                yield json.dumps({"type": "sources", "content": []})
+            else:
+                logger.info(f"[STREAM] Positive answer detected (short response), sending {len(sources)} sources")
+                yield json.dumps({"type": "sources", "content": sources})
+
+            # Stream the buffered answer
+            for buffered_token in buffered_answer:
+                clean_token = buffered_token.replace('*', '').replace('#', '').replace('`', '')
+                if clean_token:
+                    yield json.dumps({"type": "token", "content": clean_token})
         
         generation_time_ms = round((time.time() - generation_start) * 1000, 2)
         total_time_ms = round((time.time() - stream_start_time) * 1000, 2)

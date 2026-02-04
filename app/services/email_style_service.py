@@ -20,7 +20,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime
 from enum import Enum
 
-from app.embeddings.client import OllamaEmbeddingClient
+from app.embeddings.factory import get_embedding_client
 from app.vectorstore.qdrant import QdrantStore
 from app.core.config import settings
 
@@ -45,7 +45,7 @@ class EmailStyleService:
     """
 
     def __init__(self):
-        self.embedder = OllamaEmbeddingClient()
+        self.embedder = get_embedding_client()
         self.store = QdrantStore()
         self.collection = settings.QDRANT_COLLECTION_EMAIL_STYLES
         self._initialized = False

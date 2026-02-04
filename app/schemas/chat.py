@@ -46,3 +46,18 @@ class ChatResponse(BaseModel):
     message_id: Optional[str] = None
     confidence: Optional[float] = None
 
+
+class FeedbackRequest(BaseModel):
+    """Request to submit feedback for a chat response."""
+    message_id: str = Field(..., description="ID of the message being rated")
+    rating: int = Field(..., ge=-1, le=1, description="Rating: 1 (upvote), 0 (neutral), -1 (downvote)")
+    feedback: Optional[str] = Field(None, max_length=1000, description="Optional text feedback")
+
+
+class FeedbackResponse(BaseModel):
+    """Response after submitting feedback."""
+    success: bool
+    message: str
+    message_id: str
+    rating: int
+

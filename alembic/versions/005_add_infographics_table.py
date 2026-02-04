@@ -20,10 +20,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Create infographics table for storing generated infographic metadata."""
-    
-    # Create enum types
-    op.execute("CREATE TYPE infographic_style AS ENUM ('modern', 'corporate', 'minimal', 'vibrant', 'dark')")
-    op.execute("CREATE TYPE infographic_status AS ENUM ('pending', 'generating', 'completed', 'failed')")
+
+    # Create enum types (IF NOT EXISTS to make it idempotent)
+    op.execute("CREATE TYPE IF NOT EXISTS infographic_style AS ENUM ('modern', 'corporate', 'minimal', 'vibrant', 'dark')")
+    op.execute("CREATE TYPE IF NOT EXISTS infographic_status AS ENUM ('pending', 'generating', 'completed', 'failed')")
     
     op.create_table('infographics',
         # Primary key

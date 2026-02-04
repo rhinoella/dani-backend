@@ -444,7 +444,7 @@ class InfographicService:
                 try:
                     presigned_url = await self.storage.get_presigned_url(
                         s3_key,
-                        expiry=3600 * 24 * 365,  # 1 year
+                        expiry=604800,  # 7 days (AWS S3 max)
                     )
                     logger.info(f"[INFOGRAPHIC] Generated presigned URL for {s3_key}")
                 except Exception as e:
@@ -579,7 +579,7 @@ class InfographicService:
                 try:
                     presigned_url = await self.storage.get_presigned_url(
                         s3_key,
-                        expiry=3600 * 24 * 365,  # 1 year
+                        expiry=604800,  # 7 days (AWS S3 max)
                     )
                     logger.info(f"[INFOGRAPHIC] Generated presigned URL for {s3_key}")
                 except Exception as e:

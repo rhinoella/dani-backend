@@ -428,15 +428,15 @@ class ConversationService:
         conversation = await self.get_conversation(conversation_id, user_id)
         if not conversation:
             return None
-        
+
         messages = await self.msg_repo.get_conversation_export(conversation_id)
-        
+
         return {
             "id": conversation.id,
             "title": conversation.title,
             "created_at": conversation.created_at.isoformat(),
             "messages": messages,
-            "metadata": conversation.metadata
+            "metadata": dict(conversation.metadata_) if conversation.metadata_ else {}
         }
     
     async def edit_message(

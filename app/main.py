@@ -137,16 +137,18 @@ api_rate_limiter.config = rate_limit_config
 app.add_middleware(RateLimitMiddleware, rate_limiter=api_rate_limiter)
 
 # CORS middleware to allow frontend requests
+# Split comma-separated origins from settings
+cors_origins = [origin.strip() for origin in settings.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+logger.info(f"CORS configured for origins: {cors_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Next.js dev server
-        "http://127.0.0.1:3000",
-        "https://dani-frontend.onrender.com",
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],  # Expose all headers to the frontend
+    max_age=3600,  # Cache preflight requests for 1 hour
 )
 
 app.include_router(

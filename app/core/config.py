@@ -98,6 +98,9 @@ class Settings(BaseSettings):
     CONTEXT_TOKEN_BUDGET: int = 2000
     SUMMARIZE_THRESHOLD: int = 20
 
+    # CORS Configuration
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000,https://dani-frontend.onrender.com"
+
     FIREFLIES_API_KEY: str = "__MISSING__"
     FIREFLIES_BASE_URL: str = "https://api.fireflies.ai/graphql"
     FIREFLIES_WEBHOOK_SECRET: str = "__MISSING__"

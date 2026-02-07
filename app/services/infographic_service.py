@@ -482,7 +482,7 @@ class InfographicService:
                     },
                     status=InfographicStatus.COMPLETED,
                     s3_key=s3_key,
-                    s3_url=s3_url,
+                    s3_url=presigned_url or s3_url,
                     image_size=image_size,
                 )
                 logger.info(f"[INFOGRAPHIC] Saved to database: {infographic_id}")

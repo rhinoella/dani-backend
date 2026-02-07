@@ -395,6 +395,7 @@ async def list_infographics(
                 "style": item.get("style"),
                 "status": item.get("status"),
                 "image_url": item.get("image_url"),
+                "s3_key": item.get("s3_key"),
                 "created_at": item.get("created_at"),
             }
             for item in items

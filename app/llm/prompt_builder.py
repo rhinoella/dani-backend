@@ -110,10 +110,31 @@ class PromptBuilder:
             template = get_template(output_format)
             if template:
                 format_instructions = f"\n\nOUTPUT FORMAT REQUIRED:\n{template}"
-        
-        grounding_instruction = """
+
+        # Check if this is a greeting/casual query with no real content
+        is_empty_context = "No relevant" in context or not chunks
+        is_greeting = any(greeting in query.lower() for greeting in ['hello', 'hi', 'hey', 'how are you', 'good morning', 'good afternoon', 'good evening', 'whats up', "what's up"])
+
+        # Debug logging
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"[PROMPT] is_empty_context={is_empty_context}, is_greeting={is_greeting}, query='{query[:50]}', context_preview='{context[:100]}'")
+
+        if is_empty_context and is_greeting:
+            # For greetings with no context, give a friendly welcoming response
+            grounding_instruction = """
 IMPORTANT INSTRUCTIONS:
-- FOCUS ON THE CURRENT QUESTION: Answer based ONLY on the KNOWLEDGE BASE SOURCES provided above that are relevant to the current question.
+- This appears to be a greeting or casual conversation starter.
+- Respond warmly and professionally as DANI.
+- Introduce yourself as DANI, an AI assistant that can help answer questions about uploaded documents and meeting transcripts.
+- Let them know you're ready to help when they have questions about their content.
+- Keep it brief, friendly, and professional.
+- Example: "Hey! I'm DANI. I can answer questions about your uploaded documents and meeting transcripts. How can I assist you?" """
+        else:
+            # Standard RAG instructions
+            grounding_instruction = """
+IMPORTANT INSTRUCTIONS:
+- Answer based ONLY on the KNOWLEDGE BASE SOURCES provided above that are relevant to the current question.
 - TOPIC SWITCHING: If the user asks about a NEW topic (different from conversation history), focus ENTIRELY on the new topic. Do NOT reference or blend in information from previous topics discussed in the conversation.
 - ANSWER CONFIDENTLY: If the sources contain relevant information, answer directly and confidently without hedging or disclaimers.
 - When referencing meeting information, use natural language (e.g., "In the discussion with [Company/Person]...", "During the [Meeting Title]...").

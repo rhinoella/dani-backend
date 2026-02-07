@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: Optional[str] = None
     
     LLM_NUM_CTX: int = 8192      # Increased from 4096 for better context
-    LLM_NUM_PREDICT: int = 2048
+    LLM_NUM_PREDICT: int = 16384  # Very high limit to allow long responses (cloud Ollama requires positive integer)
     LLM_NUM_THREAD: int = 8      # Increased from 4 for better performance
     LLM_TEMPERATURE: float = 0.7
 

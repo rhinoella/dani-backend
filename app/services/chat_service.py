@@ -381,8 +381,11 @@ Summary:"""
         if not chunks:
             # Record e2e for no-result response
             metrics.record_e2e_request(latency_ms=(time.time() - start_time) * 1000)
+            # Check if this is a greeting
+            is_greeting = any(greeting in query.lower() for greeting in ['hello', 'hi', 'hey', 'how are you', 'good morning', 'good afternoon', 'good evening', 'whats up', "what's up"])
+            answer = "Hey! I'm DANI. I can answer questions about your uploaded documents and meeting transcripts. How can I assist you?" if is_greeting else "I don't have enough information about this in the available content."
             return {
-                "answer": "I don't have a record of that discussion.",
+                "answer": answer,
                 "sources": [],
                 "output_format": output_format,
                 "confidence": confidence,
@@ -974,7 +977,10 @@ Summary:"""
 
         if not chunks:
             logger.info(f"[STREAM] No chunks found, returning default response")
-            yield json.dumps({"type": "answer", "content": "I don't have a record of that discussion."})
+            # Check if this is a greeting
+            is_greeting = any(greeting in query.lower() for greeting in ['hello', 'hi', 'hey', 'how are you', 'good morning', 'good afternoon', 'good evening', 'whats up', "what's up"])
+            answer = "Hey! I'm DANI. I can answer questions about your uploaded documents and meeting transcripts. How can I assist you?" if is_greeting else "I don't have enough information about this in the available content."
+            yield json.dumps({"type": "answer", "content": answer})
             return
 
         # Log chunk details
@@ -1048,14 +1054,15 @@ Summary:"""
         generation_start = time.time()
         token_count = 0
         buffered_answer = ""
+        sources_sent = False
 
         # Buffer tokens to check for negative response
         async for token in self.llm.generate_stream(prompt):
             token_count += 1
             buffered_answer += token
 
-            # Once we have ~50 tokens, check if answer is negative
-            if token_count == 50:
+            # Once we have ~50 tokens, check if answer is negative and send sources
+            if token_count == 50 and not sources_sent:
                 # Check for negative phrases early
                 negative_phrases = [
                     "i don't have a record",
@@ -1083,14 +1090,18 @@ Summary:"""
                     # Send sources
                     yield json.dumps({"type": "sources", "content": sources})
 
+                sources_sent = True
+
                 # Now stream the buffered tokens
                 for buffered_token in buffered_answer:
-                    clean_token = buffered_token.replace('*', '').replace('#', '').replace('`', '')
-                    if clean_token:
-                        yield json.dumps({"type": "token", "content": clean_token})
+                    yield json.dumps({"type": "token", "content": buffered_token})
 
-                # Continue streaming remaining tokens
-                continue
+                # Clear buffer since we've sent it
+                buffered_answer = ""
+
+            # After sources are sent (or if we're past token 50), stream tokens immediately
+            elif sources_sent:
+                yield json.dumps({"type": "token", "content": token})
 
         # If we have less than 50 tokens, still need to send sources and stream answer
         if token_count < 50:
@@ -1121,9 +1132,7 @@ Summary:"""
 
             # Stream the buffered answer
             for buffered_token in buffered_answer:
-                clean_token = buffered_token.replace('*', '').replace('#', '').replace('`', '')
-                if clean_token:
-                    yield json.dumps({"type": "token", "content": clean_token})
+                yield json.dumps({"type": "token", "content": buffered_token})
         
         generation_time_ms = round((time.time() - generation_start) * 1000, 2)
         total_time_ms = round((time.time() - stream_start_time) * 1000, 2)
